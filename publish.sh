@@ -29,4 +29,5 @@ echo "=> Running nosetests"
 nosetests
 
 echo "=> Build+Upload dist"
-python setup.py sdist upload -r pypi --version $VERSION
+python setup.py sdist --version $VERSION
+twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
