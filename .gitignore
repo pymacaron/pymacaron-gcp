@@ -1,0 +1,6 @@
+docker/
+pymacaron_aws.egg-info/
+dist/
+**/__pycache__
+*.tar
+**/*.pyc
