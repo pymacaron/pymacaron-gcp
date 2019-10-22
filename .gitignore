@@ -1,5 +1,5 @@
 docker/
-pymacaron_aws.egg-info/
+pymacaron_gcp.egg-info/
 dist/
 **/__pycache__
 *.tar
