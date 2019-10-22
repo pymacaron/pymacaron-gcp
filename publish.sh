@@ -30,4 +30,4 @@ nosetests
 
 echo "=> Build+Upload dist"
 python setup.py sdist --version $VERSION
-twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
+twine upload dist/*
