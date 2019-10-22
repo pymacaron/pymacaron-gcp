@@ -1,0 +1,122 @@
+#!/bin/bash
+
+set -e
+
+ARGS=$@
+
+VERSION=
+PROG=$(basename $0)
+DO_TEST=1
+TEST_PORT=80
+
+ROOTDIR=$(git rev-parse --show-toplevel)
+if [ "$PWD" != "$ROOTDIR" ]; then
+    echo "ERROR: current dir is not the clone's root directory"
+    exit 1
+fi
+
+get_service_url() {
+    LOCAL_SERVICE_NAME=$1
+    LOCAL_URL=$(gcloud beta run services list --platform=managed | grep $LOCAL_SERVICE_NAME | awk '{ print $4 }')
+    echo $LOCAL_URL
+}
+
+get_live_url() {
+    N=$(pymconfig --name)
+    get_service_url ${N}-live
+}
+
+get_staging_url() {
+    N=$(pymconfig --name)
+    get_service_url ${N}-staging
+}
+
+usage() {
+    cat << EOF
+USAGE: $PROG [--no-test] <version>
+
+Deploy an image to Google Cloud Run in two steps, first to a staging service,
+then to a live service if the tests against staging all passed.
+
+OPTIONS:
+  --no-test         Skip tests, but still deploy to staging first, then live.
+  --live-url        Print the url of the live environment and exit.
+  --staging-url        Print the url of the live environment and exit.
+  --debug           Debug verbosity.
+  --help            This text.
+
+EOF
+}
+
+parse_args() {
+    while [ "$1" != "" ]; do
+        case $1 in
+            "--debug")         set -x; DEBUG='true';;
+            "--no-test")       export DO_TEST=;;
+            "-h" | "--help")   usage; exit 0;;
+            "--live-url")      get_live_url; exit 0;;
+            "--staging-url")   get_staging_url; exit 0;;
+            *)                 VERSION=$1;;
+        esac
+        shift
+    done
+}
+
+parse_args $ARGS
+
+SERVICE_NAME=$(pymconfig --name)
+DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
+DOCKER_REPO=$DOCKER_ROOT_REPO/$SERVICE_NAME
+
+GCP_REGION=$(pymconfig --gcp-region)
+GCP_CONCURRENCY=$(pymconfig --gcp-request-concurrency)
+GCP_MEMORY=$(pymconfig --gcp-memory)
+
+deploy() {
+    LOCAL_SERVICE_NAME=$1
+
+    echo "=> Preparing environment variables..."
+    CMD_ENV=""
+    for VAR in $(pymconfig --env-secrets)
+    do
+        VALUE=$(env | grep "$VAR=" | cut -d '=' -f 2)
+        CMD_ENV="$CMD_ENV,$VAR=$VALUE"
+    done
+    # And remove the heading ',' character
+    CMD_ENV=$(echo $CMD_ENV | sed 's/^,\(.*\)/\1/')
+
+    echo "=> Deploying to service $LOCAL_SERVICE_NAME"
+    gcloud beta run deploy $LOCAL_SERVICE_NAME \
+           --image gcr.io/$DOCKER_REPO:$VERSION \
+           --platform managed \
+           --region $GCP_REGION \
+           --concurrency $GCP_CONCURRENCY \
+           --memory $GCP_MEMORY \
+           --allow-unauthenticated \
+           --update-env-vars=$CMD_ENV
+
+    RC=$?
+    if [ "$RC" -ne 0 ]; then
+        echo "ERROR: Failed to deploy version $VERSION of $SERVICE_NAME to environment $LOCAL_SERVICE_NAME"
+        exit 1
+    fi
+}
+
+# Deploy to staging service
+deploy ${SERVICE_NAME}-staging
+
+URL=$(get_staging_url)
+echo "=> Service is running at url $URL"
+
+cd $ROOTDIR
+if [ ! -z "$DO_TEST" ]; then
+    pymtest --host $URL --port $TEST_PORT --no-ssl-check
+fi
+
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
+    exit 1
+fi
+
+deploy ${SERVICE_NAME}-live
