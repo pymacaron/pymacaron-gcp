@@ -31,3 +31,4 @@ nosetests
 echo "=> Build+Upload dist"
 python setup.py sdist --version $VERSION
 twine upload dist/*
+rm dist/*
