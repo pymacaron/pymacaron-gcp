@@ -29,6 +29,6 @@ echo "=> Running nosetests"
 nosetests
 
 echo "=> Build+Upload dist"
+rm -f dist/*
 python setup.py sdist --version $VERSION
 twine upload dist/*
-rm dist/*
