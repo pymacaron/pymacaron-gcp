@@ -1,4 +1,4 @@
 pycodestyle
 nose
-twine>=1.8.0
+twine==1.15.0
 setuptools>=27.0.0
