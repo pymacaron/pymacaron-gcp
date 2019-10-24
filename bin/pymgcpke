@@ -86,27 +86,30 @@ NAME_LIVE=${APP_NAME}-live
 # gcloud config set app/stop_previous_version true
 
 do_apply_deployment() {
-    LOCAL_CLUSTER_NAME=$1
+    LOCAL_NAME=$1
 
     CONTAINER_NAME=container-$APP_NAME
-    LOCAL_DEPLOYMENT_NAME=deployment-$LOCAL_CLUSTER_NAME
 
     echo "=> Creating pod config"
-    DEP_FILE=.pym/$LOCAL_DEPLOYMENT_NAME.yaml
+    DEP_FILE=.pym/deployment-$LOCAL_NAME.yaml
     cat <<EOF > $DEP_FILE
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
-  name: $LOCAL_DEPLOYMENT_NAME
+  name: $LOCAL_NAME
   namespace: default
+  labels:
+    app: $LOCAL_NAME
 spec:
   selector:
     matchLabels:
-      run: $CONTAINER_NAME
+      run: $LOCAL_NAME
+      app: $LOCAL_NAME
   template:
     metadata:
       labels:
-        run: $CONTAINER_NAME
+        run: $LOCAL_NAME
+        app: $LOCAL_NAME
     spec:
       terminationGracePeriodSeconds: 180
       containers:
@@ -141,7 +144,7 @@ EOF
         echo "          value: \"$VALUE\"" >> $DEP_FILE
     done
 
-    IS_DEPLOYED=$(kubectl get deployment | grep "$LOCAL_DEPLOYMENT_NAME " | wc -l)
+    IS_DEPLOYED=$(kubectl get deployment | grep "$LOCAL_NAME " | wc -l)
 
     if [ "$IS_DEPLOYED" -eq "1" ]; then
         echo "=> Deployment already exists. Applying change..."
@@ -154,29 +157,27 @@ EOF
 }
 
 do_apply_service() {
-    LOCAL_CLUSTER_NAME=$1
+    LOCAL_NAME=$1
 
-    # The service is the same for all deployments
-    SERVICE_NAME=service-$LOCAL_CLUSTER_NAME
-
-    IS_DEPLOYED=$(kubectl get services -o wide | grep "$SERVICE_NAME " | wc -l)
+    IS_DEPLOYED=$(kubectl get services -o wide | grep "$LOCAL_NAME " | wc -l)
 
     if [ "$IS_DEPLOYED" -eq "1" ]; then
-        echo "=> The service $SERVICE_NAME already exists"
+        echo "=> The service already exists"
     else
-        echo "=> The service $SERVICE_NAME does not exist. Creating it..."
+        echo "=> The service does not exist. Creating it..."
 
-        SRV_FILE=.pym/$SERVICE_NAME.yaml
+        SRV_FILE=.pym/service-$LOCAL_NAME.yaml
         cat <<EOF > $SRV_FILE
 apiVersion: v1
 kind: Service
 metadata:
-  name: $SERVICE_NAME
+  name: $LOCAL_NAME
   namespace: default
 spec:
   type: LoadBalancer
   selector:
-    run: deployment-$LOCAL_CLUSTER_NAME
+    app: $LOCAL_NAME
+    run: $LOCAL_NAME
   ports:
   - port: 80
     protocol: TCP
@@ -188,10 +189,10 @@ EOF
 }
 
 # do_apply_ingress() {
-#     LOCAL_CLUSTER_NAME=$1
+#     LOCAL_NAME=$1
 
 #     # TODO: make sure we are deploying to a -staging cluster, not the -live one
-#     INGRESS_NAME=ingress-$LOCAL_CLUSTER_NAME
+#     INGRESS_NAME=ingress-$LOCAL_NAME
 
 #     IS_DEPLOYED=$(kubectl get ingress -o wide | grep "$INGRESS_NAME " | wc -l)
 
@@ -209,7 +210,7 @@ EOF
 #   namespace: default
 # spec:
 #   backend:
-#     serviceName: service-$LOCAL_CLUSTER_NAME
+#     serviceName: service-$LOCAL_NAME
 #     servicePort: 80
 # status:
 #   loadBalancer: {}
@@ -255,7 +256,20 @@ do_apply_service $NAME_STAGING
 # do_apply_ingress $NAME_STAGING
 
 # Then wait for the deployment to be ready
-kubectl rollout status deployment/deployment-$NAME_STAGING
+echo "=> Waiting for deployment..."
+kubectl rollout status deployment/$NAME_STAGING
+
+# Wait for external IP to be assigned
+echo "=> Waiting for external IP..."
+IP="<pending>"
+while [ "$IP" == "<pending>" ]; do
+    sleep 1
+    echo -n '*'
+    IP=$(kubectl get service | grep "${NAME_STAGING} " | awk '{ print $4 }')
+done
+echo ''
+
+echo "=> $NAME_STAGING is now live at $IP"
 
 exit 0
 
