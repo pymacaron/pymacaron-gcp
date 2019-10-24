@@ -13,8 +13,6 @@ VERSION=
 PROG=$(basename $0)
 DO_TEST=1
 TEST_PORT=80
-STAGING_REPLICAS=1
-LIVE_REPLICAS=2
 
 ROOTDIR=$(git rev-parse --show-toplevel)
 if [ "$PWD" != "$ROOTDIR" ]; then
@@ -22,33 +20,23 @@ if [ "$PWD" != "$ROOTDIR" ]; then
     exit 1
 fi
 
-get_pod_state() {
-    LOCAL_POD_NAME=$1
-    LOCAL_STATE=$(kubectl get pods -o wide | grep $LOCAL_POD_NAME | awk '{ print $3 }')
-    echo $LOCAL_STATE
-}
-
-get_service_location() {
-    LOCAL_SERVICE_NAME=$1
-    LOCAL_LOCATION=$(gcloud container clusters list | grep $LOCAL_SERVICE_NAME | awk '{ print $2 }')
+get_cluster_location() {
+    LOCAL_CLUSTER_NAME=$1
+    LOCAL_LOCATION=$(gcloud container clusters list | grep "$LOCAL_CLUSTER_NAME " | awk '{ print $2 }')
     echo $LOCAL_LOCATION
-}
-
-get_service_url() {
-    LOCAL_SERVICE_NAME=$1
-    LOCATION=$(get_service_location $LOCAL_SERVICE_NAME)
-    LOCAL_URL=$(gcloud beta run services list --platform=managed | grep $LOCAL_SERVICE_NAME | awk '{ print $4 }')
-    echo $LOCAL_URL
 }
 
 get_live_url() {
     N=$(pymconfig --name)
-    get_service_url ${N}-live
+    echo "NOT IMPLEMENTED"
+    exit -1
 }
 
 get_staging_url() {
     N=$(pymconfig --name)
-    get_service_url ${N}-staging
+    N=ingress-${N}-staging
+    LOCAL_IP=$(kubectl get ingress | grep "$N " | awk '{ print $3 }')
+    echo https://$LOCAL_IP
 }
 
 usage() {
@@ -84,91 +72,61 @@ parse_args() {
 
 parse_args $ARGS
 
-SERVICE_NAME=$(pymconfig --name)
+APP_NAME=$(pymconfig --name)
 DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
-DOCKER_REPO=$DOCKER_ROOT_REPO/$SERVICE_NAME
+DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
 GCP_REGION=$(pymconfig --gcp-region)
 GCP_CONCURRENCY=$(pymconfig --gcp-request-concurrency)
 GCP_MEMORY=$(pymconfig --gcp-memory)
-NAME_STAGING=${SERVICE_NAME}-staging
-NAME_LIVE=${SERVICE_NAME}-live
-
-
-echo "=> Creating tmp dir .pym/"
-mkdir -p .pym
-
-echo "=> Setting gcloud project to: $GCP_PROJECT"
-gcloud config set project $GCP_PROJECT
-
-echo "=> Setting gcp region to: "
-#gcloud config set compute/zone europe-west3
-gcloud config set compute/region $GCP_REGION
+NAME_STAGING=${APP_NAME}-staging
+NAME_LIVE=${APP_NAME}-live
 
 # Stop previous versions?
 # gcloud config set app/stop_previous_version true
 
-deploy() {
-    LOCAL_SERVICE_NAME=$1
-    LOCAL_REPLICAS=$2
+do_apply_deployment() {
+    LOCAL_CLUSTER_NAME=$1
 
-    echo ""
-    echo "=> Deploying $LOCAL_SERVICE_NAME"
-    echo ""
-
-    gcloud config set container/cluster $LOCAL_SERVICE_NAME
-
-    LOCATION=$(get_service_location $LOCAL_SERVICE_NAME)
-    echo "=> In location: $LOCATION"
-
-    # TODO: figure out whether to use --zone or --region
-    gcloud container clusters get-credentials $LOCAL_SERVICE_NAME --zone $LOCATION --project $GCP_PROJECT
-
-    # Use create and replace? or apply?
-    # See: https://stackoverflow.com/questions/47369351/kubectl-apply-vs-kubectl-create
-    # kubectl create deployment ${SERVICE_NAME}-${VERSION} # --image=gcr.io/$DOCKER_REPO:${VERSION}
-
-    # The staging and live clusters are supposed to already be created, prior
-    # to running pymgcpgke, so we do a kubectl apply, rather than a create+replace
-
-    # See https://cloud.google.com/kubernetes-engine/docs/tutorials/http-balancer
-
-    # Generate a unique deployment name - Adding epoch so that we can deploy
-    # the same docker image multiple time in a row
-    EPOCH=$(date +%s)
-    DEPLOY_NAME=$LOCAL_SERVICE_NAME-${VERSION}--${EPOCH}
-    echo "=> Using unique pod name $DEPLOY_NAME"
-
-    #
-    # Create a new pod running our docker image
-    #
+    CONTAINER_NAME=container-$APP_NAME
+    LOCAL_DEPLOYMENT_NAME=deployment-$LOCAL_CLUSTER_NAME
 
     echo "=> Creating pod config"
-    DEP_FILE=.pym/dep-$LOCAL_SERVICE_NAME.yaml
+    DEP_FILE=.pym/$LOCAL_DEPLOYMENT_NAME.yaml
     cat <<EOF > $DEP_FILE
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
-  name: deployment-$DEPLOY_NAME
+  name: $LOCAL_DEPLOYMENT_NAME
   namespace: default
 spec:
   selector:
     matchLabels:
-      run: container-$SERVICE_NAME-${VERSION}
+      run: $CONTAINER_NAME
   template:
     metadata:
       labels:
-        run: container-$SERVICE_NAME-${VERSION}
+        run: $CONTAINER_NAME
     spec:
       terminationGracePeriodSeconds: 180
       containers:
-      - name: container-$SERVICE_NAME-${VERSION}
+      - name: $CONTAINER_NAME
         image: gcr.io/$DOCKER_REPO:${VERSION}
+        livenessProbe:
+          initialDelaySeconds: 120
+          timeoutSeconds: 10
+          periodSeconds: 90
+          httpGet:
+            path: /ping
+            port: 8080
+            scheme: HTTP
         ports:
         - containerPort: 8080
         env:
         - name: PORT
           value: "8080"
+        - name: VERSION
+          value: "${VERSION}"
 EOF
 
     for VAR in $(pymconfig --env-secrets)
@@ -183,96 +141,136 @@ EOF
         echo "          value: \"$VALUE\"" >> $DEP_FILE
     done
 
-    # TODO: check if version already released, and do create or update based on it
-    # + drop epoch in deploy name
+    IS_DEPLOYED=$(kubectl get deployment | grep "$LOCAL_DEPLOYMENT_NAME " | wc -l)
 
-    echo "=> Creating deployment"
-    kubectl create -f $DEP_FILE
+    if [ "$IS_DEPLOYED" -eq "1" ]; then
+        echo "=> Deployment already exists. Applying change..."
+        kubectl apply -f $DEP_FILE
 
-    #
-    # Update the cluster's service to use this deployment
-    #
+    else
+        echo "=> Deployment is new. Creating it..."
+        kubectl create --save-config -f $DEP_FILE
+    fi
+}
 
-    echo "=> Creating service config"
-    SRV_FILE=.pym/service-$LOCAL_SERVICE_NAME.yaml
-    cat <<EOF > $SRV_FILE
+do_apply_service() {
+    LOCAL_CLUSTER_NAME=$1
+
+    # The service is the same for all deployments
+    SERVICE_NAME=service-$LOCAL_CLUSTER_NAME
+
+    IS_DEPLOYED=$(kubectl get services -o wide | grep "$SERVICE_NAME " | wc -l)
+
+    if [ "$IS_DEPLOYED" -eq "1" ]; then
+        echo "=> The service $SERVICE_NAME already exists"
+    else
+        echo "=> The service $SERVICE_NAME does not exist. Creating it..."
+
+        SRV_FILE=.pym/$SERVICE_NAME.yaml
+        cat <<EOF > $SRV_FILE
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-$LOCAL_SERVICE_NAME
+  name: $SERVICE_NAME
   namespace: default
 spec:
+  type: LoadBalancer
+  selector:
+    run: deployment-$LOCAL_CLUSTER_NAME
   ports:
-  - port: 8080
+  - port: 80
     protocol: TCP
     targetPort: 8080
-  selector:
-    run: deployment-$DEPLOY_NAME
-  type: NodePort
 EOF
 
-    echo "=> Applying service update"
-    kubectl apply -f $SRV_FILE
+        kubectl apply -f $SRV_FILE
+    fi
+}
 
-    # NOTE: we are assuming that the cluster named $LOCAL_SERVICE_NAME has been
-    # manually configured with an ingress load balancer that redirects HTTP and
-    # HTTPS to the service 'service-$LOCAL_SERVICE_NAME' on port 8080
+# do_apply_ingress() {
+#     LOCAL_CLUSTER_NAME=$1
 
-#     #
-#     # Create ingress load balancer
-#     #
+#     # TODO: make sure we are deploying to a -staging cluster, not the -live one
+#     INGRESS_NAME=ingress-$LOCAL_CLUSTER_NAME
 
-#     echo "=> Creating ingress config"
-#     ING_FILE=ingress-$LOCAL_SERVICE_NAME.yaml
-#     cat <<EOF > $ING_FILE
+#     IS_DEPLOYED=$(kubectl get ingress -o wide | grep "$INGRESS_NAME " | wc -l)
+
+#     if [ "$IS_DEPLOYED" -eq "1" ]; then
+#         echo "=> The ingress $INGRESS_NAME already exists"
+#     else
+#         echo "=> The ingress $INGRESS_NAME does not exist. Creating it..."
+
+#         SRV_FILE=.pym/$INGRESS_NAME.yaml
+#         cat <<EOF > $SRV_FILE
 # apiVersion: extensions/v1beta1
 # kind: Ingress
 # metadata:
-#   name: ingress-$POD_NAME
+#   name: $INGRESS_NAME
+#   namespace: default
 # spec:
 #   backend:
-#     serviceName: web
-#     servicePort: 8080
+#     serviceName: service-$LOCAL_CLUSTER_NAME
+#     servicePort: 80
+# status:
+#   loadBalancer: {}
 # EOF
 
-#     echo "=> Applying ingress"
-#     kubectl apply -f $ING_FILE
+#         kubectl apply -f $SRV_FILE
 
-    # Poll the new deployment until it's ready of timeout...
-    echo "=> Waiting for POD to be running"
+#     fi
+# }
 
-    STATUS=0
-    while [ "$STATUS" != 'Running' ];
-    do
-        sleep 2
-        echo "*"
-        STATUS=$(get_pod_state $DEP_NAME)
-    done
+#
+# General settings
+#
 
-    # RC=$?
-    # if [ "$RC" -ne 0 ]; then
-    #     echo "ERROR: Failed to deploy version $VERSION of $SERVICE_NAME to environment $LOCAL_SERVICE_NAME"
-    #     exit 1
-    # fi
-}
+echo "=> Creating tmp dir .pym/"
+mkdir -p .pym
 
-# Deploy to staging service
-deploy $NAME_STAGING $STAGING_REPLICAS
+
+
+# ------------------------------------------------------------------------------
+#
+# DEPLOY TO STAGING CLUSTER
+#
+# The staging cluster should have only 1 zone, have auto-scaling with minimum
+# instance count = 1 and maximum = 2
+#
+# ------------------------------------------------------------------------------
+
+echo "=> Configuring gcloud..."
+gcloud config set project $GCP_PROJECT
+gcloud config set compute/region $GCP_REGION
+
+echo "=> Using $NAME_STAGING cluster..."
+gcloud config set container/cluster $NAME_STAGING
+
+# Using --zone since the staging environment is supposed to be in one zone only
+LOCATION=$(get_cluster_location $NAME_STAGING)
+gcloud container clusters get-credentials $NAME_STAGING --zone $LOCATION --project $GCP_PROJECT
+
+# And create/apply deployment, service and ingress, when needed
+do_apply_deployment $NAME_STAGING
+do_apply_service $NAME_STAGING
+# do_apply_ingress $NAME_STAGING
+
+# Then wait for the deployment to be ready
+kubectl rollout status deployment/deployment-$NAME_STAGING
 
 exit 0
 
-URL=$(get_staging_url)
-echo "=> Service is running at url $URL"
+# URL=$(get_staging_url)
+# echo "=> Service is running at url $URL"
 
-cd $ROOTDIR
-if [ ! -z "$DO_TEST" ]; then
-    pymtest --host $URL --port $TEST_PORT --no-ssl-check
-fi
+# cd $ROOTDIR
+# if [ ! -z "$DO_TEST" ]; then
+#     pymtest --host $URL --port $TEST_PORT --no-ssl-check
+# fi
 
-RC=$?
-if [ "$RC" -ne 0 ]; then
-    echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
-    exit 1
-fi
+# RC=$?
+# if [ "$RC" -ne 0 ]; then
+#     echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
+#     exit 1
+# fi
 
-deploy ${SERVICE_NAME}-live $LIVE_REPLICAS
+# deploy ${SERVICE_NAME}-live
