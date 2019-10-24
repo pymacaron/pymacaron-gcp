@@ -34,8 +34,7 @@ get_live_url() {
 
 get_staging_url() {
     N=$(pymconfig --name)
-    N=ingress-${N}-staging
-    LOCAL_IP=$(kubectl get ingress | grep "$N " | awk '{ print $3 }')
+    LOCAL_IP=$(kubectl get service | grep "${N}-staging " | awk '{ print $4 }')
     echo https://$LOCAL_IP
 }
 
@@ -188,47 +187,12 @@ EOF
     fi
 }
 
-# do_apply_ingress() {
-#     LOCAL_NAME=$1
-
-#     # TODO: make sure we are deploying to a -staging cluster, not the -live one
-#     INGRESS_NAME=ingress-$LOCAL_NAME
-
-#     IS_DEPLOYED=$(kubectl get ingress -o wide | grep "$INGRESS_NAME " | wc -l)
-
-#     if [ "$IS_DEPLOYED" -eq "1" ]; then
-#         echo "=> The ingress $INGRESS_NAME already exists"
-#     else
-#         echo "=> The ingress $INGRESS_NAME does not exist. Creating it..."
-
-#         SRV_FILE=.pym/$INGRESS_NAME.yaml
-#         cat <<EOF > $SRV_FILE
-# apiVersion: extensions/v1beta1
-# kind: Ingress
-# metadata:
-#   name: $INGRESS_NAME
-#   namespace: default
-# spec:
-#   backend:
-#     serviceName: service-$LOCAL_NAME
-#     servicePort: 80
-# status:
-#   loadBalancer: {}
-# EOF
-
-#         kubectl apply -f $SRV_FILE
-
-#     fi
-# }
-
 #
 # General settings
 #
 
 echo "=> Creating tmp dir .pym/"
 mkdir -p .pym
-
-
 
 # ------------------------------------------------------------------------------
 #
@@ -251,9 +215,12 @@ LOCATION=$(get_cluster_location $NAME_STAGING)
 gcloud container clusters get-credentials $NAME_STAGING --zone $LOCATION --project $GCP_PROJECT
 
 # And create/apply deployment, service and ingress, when needed
+
+echo ""
+echo "=> Deploying $VERSION to $NAME_STAGING"
+
 do_apply_deployment $NAME_STAGING
 do_apply_service $NAME_STAGING
-# do_apply_ingress $NAME_STAGING
 
 # Then wait for the deployment to be ready
 echo "=> Waiting for deployment..."
@@ -271,20 +238,24 @@ echo ''
 
 echo "=> $NAME_STAGING is now live at $IP"
 
-exit 0
+# ------------------------------------------------------------------------------
+#
+# RUN ACCEPTANCE TESTS
+#
+# ------------------------------------------------------------------------------
 
-# URL=$(get_staging_url)
-# echo "=> Service is running at url $URL"
+cd $ROOTDIR
+if [ ! -z "$DO_TEST" ]; then
+    URL=$(get_staging_url)
+    echo ""
+    echo "=> Executing tests against $NAME_STAGING"
+    pymtest --host $URL --port $TEST_PORT --no-ssl-check
+fi
 
-# cd $ROOTDIR
-# if [ ! -z "$DO_TEST" ]; then
-#     pymtest --host $URL --port $TEST_PORT --no-ssl-check
-# fi
-
-# RC=$?
-# if [ "$RC" -ne 0 ]; then
-#     echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
-#     exit 1
-# fi
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
+    exit 1
+fi
 
 # deploy ${SERVICE_NAME}-live
