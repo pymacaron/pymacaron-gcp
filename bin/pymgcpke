@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# NOTES: requirements
+# gcloud components install kubectl
+# gcloud auth configure-docker
+#
+
 set -e
 
 ARGS=$@
@@ -8,6 +13,8 @@ VERSION=
 PROG=$(basename $0)
 DO_TEST=1
 TEST_PORT=80
+STAGING_REPLICAS=1
+LIVE_REPLICAS=2
 
 ROOTDIR=$(git rev-parse --show-toplevel)
 if [ "$PWD" != "$ROOTDIR" ]; then
@@ -17,7 +24,7 @@ fi
 
 get_pod_state() {
     LOCAL_POD_NAME=$1
-    LOCAL_STATE=$(kubectl get pods | grep $LOCAL_POD_NAME | awk '{ print $3 }')
+    LOCAL_STATE=$(kubectl get pods -o wide | grep $LOCAL_POD_NAME | awk '{ print $3 }')
     echo $LOCAL_STATE
 }
 
@@ -88,6 +95,9 @@ NAME_STAGING=${SERVICE_NAME}-staging
 NAME_LIVE=${SERVICE_NAME}-live
 
 
+echo "=> Creating tmp dir .pym/"
+mkdir -p .pym
+
 echo "=> Setting gcloud project to: $GCP_PROJECT"
 gcloud config set project $GCP_PROJECT
 
@@ -100,6 +110,7 @@ gcloud config set compute/region $GCP_REGION
 
 deploy() {
     LOCAL_SERVICE_NAME=$1
+    LOCAL_REPLICAS=$2
 
     echo ""
     echo "=> Deploying $LOCAL_SERVICE_NAME"
@@ -120,25 +131,44 @@ deploy() {
     # The staging and live clusters are supposed to already be created, prior
     # to running pymgcpgke, so we do a kubectl apply, rather than a create+replace
 
-    # Set environment variables in the clusters
-    echo "=> Creating yaml config"
-    POD_NAME=$LOCAL_SERVICE_NAME-${VERSION}
-    POD_FILE=pod-$LOCAL_SERVICE_NAME.yaml
-    cat <<EOF > $POD_FILE
-apiVersion: v1
-kind: Pod
-metadata:
-  name: $LOCAL_SERVICE_NAME-${VERSION}
+    # See https://cloud.google.com/kubernetes-engine/docs/tutorials/http-balancer
 
+    # Generate a unique deployment name - Adding epoch so that we can deploy
+    # the same docker image multiple time in a row
+    EPOCH=$(date +%s)
+    DEPLOY_NAME=$LOCAL_SERVICE_NAME-${VERSION}--${EPOCH}
+    echo "=> Using unique pod name $DEPLOY_NAME"
+
+    #
+    # Create a new pod running our docker image
+    #
+
+    echo "=> Creating pod config"
+    DEP_FILE=.pym/dep-$LOCAL_SERVICE_NAME.yaml
+    cat <<EOF > $DEP_FILE
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: deployment-$DEPLOY_NAME
+  namespace: default
 spec:
-  containers:
-  - name: $SERVICE_NAME-${VERSION}
-    image: gcr.io/$DOCKER_REPO:${VERSION}
-    ports:
-      - containerPort: 80
-    env:
-      - name: PORT
-        value: "80"
+  selector:
+    matchLabels:
+      run: container-$SERVICE_NAME-${VERSION}
+  template:
+    metadata:
+      labels:
+        run: container-$SERVICE_NAME-${VERSION}
+    spec:
+      terminationGracePeriodSeconds: 180
+      containers:
+      - name: container-$SERVICE_NAME-${VERSION}
+        image: gcr.io/$DOCKER_REPO:${VERSION}
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
 EOF
 
     for VAR in $(pymconfig --env-secrets)
@@ -149,14 +179,64 @@ EOF
             echo "ERROR: variable $VAR has no value in env"
             exit 1
         fi
-        echo "      - name: $VAR" >> $POD_FILE
-        echo "        value: \"$VALUE\"" >> $POD_FILE
+        echo "        - name: $VAR" >> $DEP_FILE
+        echo "          value: \"$VALUE\"" >> $DEP_FILE
     done
 
-    # Apply this configuration
-    # kubectl apply -f $LOCAL_SERVICE_NAME.yaml
-    echo "=> Creating POD"
-    kubectl create -f $POD_FILE
+    # TODO: check if version already released, and do create or update based on it
+    # + drop epoch in deploy name
+
+    echo "=> Creating deployment"
+    kubectl create -f $DEP_FILE
+
+    #
+    # Update the cluster's service to use this deployment
+    #
+
+    echo "=> Creating service config"
+    SRV_FILE=.pym/service-$LOCAL_SERVICE_NAME.yaml
+    cat <<EOF > $SRV_FILE
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-$LOCAL_SERVICE_NAME
+  namespace: default
+spec:
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    run: deployment-$DEPLOY_NAME
+  type: NodePort
+EOF
+
+    echo "=> Applying service update"
+    kubectl apply -f $SRV_FILE
+
+    # NOTE: we are assuming that the cluster named $LOCAL_SERVICE_NAME has been
+    # manually configured with an ingress load balancer that redirects HTTP and
+    # HTTPS to the service 'service-$LOCAL_SERVICE_NAME' on port 8080
+
+#     #
+#     # Create ingress load balancer
+#     #
+
+#     echo "=> Creating ingress config"
+#     ING_FILE=ingress-$LOCAL_SERVICE_NAME.yaml
+#     cat <<EOF > $ING_FILE
+# apiVersion: extensions/v1beta1
+# kind: Ingress
+# metadata:
+#   name: ingress-$POD_NAME
+# spec:
+#   backend:
+#     serviceName: web
+#     servicePort: 8080
+# EOF
+
+#     echo "=> Applying ingress"
+#     kubectl apply -f $ING_FILE
 
     # Poll the new deployment until it's ready of timeout...
     echo "=> Waiting for POD to be running"
@@ -166,7 +246,7 @@ EOF
     do
         sleep 2
         echo "*"
-        STATUS=$(get_pod_state $POD_NAME)
+        STATUS=$(get_pod_state $DEP_NAME)
     done
 
     # RC=$?
@@ -177,7 +257,7 @@ EOF
 }
 
 # Deploy to staging service
-deploy $NAME_STAGING
+deploy $NAME_STAGING $STAGING_REPLICAS
 
 exit 0
 
@@ -195,4 +275,4 @@ if [ "$RC" -ne 0 ]; then
     exit 1
 fi
 
-deploy ${SERVICE_NAME}-live
+deploy ${SERVICE_NAME}-live $LIVE_REPLICAS
