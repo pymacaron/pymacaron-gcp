@@ -35,13 +35,13 @@ usage() {
     cat << EOF
 USAGE: $PROG [--no-test] <version>
 
-Deploy an image to Google Cloud Run in two steps, first to a staging service,
-then to a live service if the tests against staging all passed.
+Deploy a Docker image to Google Cloud Run in two steps, first to a staging
+service, then to a live service if the tests against staging all passed.
 
 OPTIONS:
   --no-test         Skip tests, but still deploy to staging first, then live.
   --live-url        Print the url of the live environment and exit.
-  --staging-url        Print the url of the live environment and exit.
+  --staging-url     Print the url of the staging environment and exit.
   --debug           Debug verbosity.
   --help            This text.
 

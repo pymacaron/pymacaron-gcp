@@ -1,0 +1,198 @@
+#!/bin/bash
+
+set -e
+
+ARGS=$@
+
+VERSION=
+PROG=$(basename $0)
+DO_TEST=1
+TEST_PORT=80
+
+ROOTDIR=$(git rev-parse --show-toplevel)
+if [ "$PWD" != "$ROOTDIR" ]; then
+    echo "ERROR: current dir is not the clone's root directory"
+    exit 1
+fi
+
+get_pod_state() {
+    LOCAL_POD_NAME=$1
+    LOCAL_STATE=$(kubectl get pods | grep $LOCAL_POD_NAME | awk '{ print $3 }')
+    echo $LOCAL_STATE
+}
+
+get_service_location() {
+    LOCAL_SERVICE_NAME=$1
+    LOCAL_LOCATION=$(gcloud container clusters list | grep $LOCAL_SERVICE_NAME | awk '{ print $2 }')
+    echo $LOCAL_LOCATION
+}
+
+get_service_url() {
+    LOCAL_SERVICE_NAME=$1
+    LOCATION=$(get_service_location $LOCAL_SERVICE_NAME)
+    LOCAL_URL=$(gcloud beta run services list --platform=managed | grep $LOCAL_SERVICE_NAME | awk '{ print $4 }')
+    echo $LOCAL_URL
+}
+
+get_live_url() {
+    N=$(pymconfig --name)
+    get_service_url ${N}-live
+}
+
+get_staging_url() {
+    N=$(pymconfig --name)
+    get_service_url ${N}-staging
+}
+
+usage() {
+    cat << EOF
+USAGE: $PROG [--no-test] <version>
+
+Deploy a Docker image to GKE in two steps, first to a staging service, then to
+a live service if the tests against staging all passed.
+
+OPTIONS:
+  --no-test         Skip tests, but still deploy to staging first, then live.
+  --live-url        Print the url of the live environment and exit.
+  --staging-url     Print the url of the staging environment and exit.
+  --debug           Debug verbosity.
+  --help            This text.
+
+EOF
+}
+
+parse_args() {
+    while [ "$1" != "" ]; do
+        case $1 in
+            "--debug")         set -x; DEBUG='true';;
+            "--no-test")       export DO_TEST=;;
+            "-h" | "--help")   usage; exit 0;;
+            "--live-url")      get_live_url; exit 0;;
+            "--staging-url")   get_staging_url; exit 0;;
+            *)                 VERSION=$1;;
+        esac
+        shift
+    done
+}
+
+parse_args $ARGS
+
+SERVICE_NAME=$(pymconfig --name)
+DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
+DOCKER_REPO=$DOCKER_ROOT_REPO/$SERVICE_NAME
+GCP_PROJECT=$DOCKER_ROOT_REPO
+GCP_REGION=$(pymconfig --gcp-region)
+GCP_CONCURRENCY=$(pymconfig --gcp-request-concurrency)
+GCP_MEMORY=$(pymconfig --gcp-memory)
+NAME_STAGING=${SERVICE_NAME}-staging
+NAME_LIVE=${SERVICE_NAME}-live
+
+
+echo "=> Setting gcloud project to: $GCP_PROJECT"
+gcloud config set project $GCP_PROJECT
+
+echo "=> Setting gcp region to: "
+#gcloud config set compute/zone europe-west3
+gcloud config set compute/region $GCP_REGION
+
+# Stop previous versions?
+# gcloud config set app/stop_previous_version true
+
+deploy() {
+    LOCAL_SERVICE_NAME=$1
+
+    echo ""
+    echo "=> Deploying $LOCAL_SERVICE_NAME"
+    echo ""
+
+    gcloud config set container/cluster $LOCAL_SERVICE_NAME
+
+    LOCATION=$(get_service_location $LOCAL_SERVICE_NAME)
+    echo "=> In location: $LOCATION"
+
+    # TODO: figure out whether to use --zone or --region
+    gcloud container clusters get-credentials $LOCAL_SERVICE_NAME --zone $LOCATION --project $GCP_PROJECT
+
+    # Use create and replace? or apply?
+    # See: https://stackoverflow.com/questions/47369351/kubectl-apply-vs-kubectl-create
+    # kubectl create deployment ${SERVICE_NAME}-${VERSION} # --image=gcr.io/$DOCKER_REPO:${VERSION}
+
+    # The staging and live clusters are supposed to already be created, prior
+    # to running pymgcpgke, so we do a kubectl apply, rather than a create+replace
+
+    # Set environment variables in the clusters
+    echo "=> Creating yaml config"
+    POD_NAME=$LOCAL_SERVICE_NAME-${VERSION}
+    POD_FILE=pod-$LOCAL_SERVICE_NAME.yaml
+    cat <<EOF > $POD_FILE
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $LOCAL_SERVICE_NAME-${VERSION}
+
+spec:
+  containers:
+  - name: $SERVICE_NAME-${VERSION}
+    image: gcr.io/$DOCKER_REPO:${VERSION}
+    ports:
+      - containerPort: 80
+    env:
+      - name: PORT
+        value: "80"
+EOF
+
+    for VAR in $(pymconfig --env-secrets)
+    do
+        echo "   Adding $VAR"
+        VALUE=$(env | grep "^$VAR=" | cut -d '=' -f 2)
+        if [ -z "$VALUE" ]; then
+            echo "ERROR: variable $VAR has no value in env"
+            exit 1
+        fi
+        echo "      - name: $VAR" >> $POD_FILE
+        echo "        value: \"$VALUE\"" >> $POD_FILE
+    done
+
+    # Apply this configuration
+    # kubectl apply -f $LOCAL_SERVICE_NAME.yaml
+    echo "=> Creating POD"
+    kubectl create -f $POD_FILE
+
+    # Poll the new deployment until it's ready of timeout...
+    echo "=> Waiting for POD to be running"
+
+    STATUS=0
+    while [ "$STATUS" != 'Running' ];
+    do
+        sleep 2
+        echo "*"
+        STATUS=$(get_pod_state $POD_NAME)
+    done
+
+    # RC=$?
+    # if [ "$RC" -ne 0 ]; then
+    #     echo "ERROR: Failed to deploy version $VERSION of $SERVICE_NAME to environment $LOCAL_SERVICE_NAME"
+    #     exit 1
+    # fi
+}
+
+# Deploy to staging service
+deploy $NAME_STAGING
+
+exit 0
+
+URL=$(get_staging_url)
+echo "=> Service is running at url $URL"
+
+cd $ROOTDIR
+if [ ! -z "$DO_TEST" ]; then
+    pymtest --host $URL --port $TEST_PORT --no-ssl-check
+fi
+
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
+    exit 1
+fi
+
+deploy ${SERVICE_NAME}-live
