@@ -223,8 +223,18 @@ do_apply_deployment $NAME_STAGING
 do_apply_service $NAME_STAGING
 
 # Then wait for the deployment to be ready
-echo "=> Waiting for deployment..."
+echo "=> Waiting for deployment to get started..."
 kubectl rollout status deployment/$NAME_STAGING
+
+# Then wait for rollout to be complete
+echo "=> Waiting for rollout to be complete..."
+COUNT=2
+while [ "$COUNT" -ne 1 ]; do
+    sleep 1
+    echo -n '*'
+    COUNT=$(kubectl get pods -o jsonpath="{..image}" | tr -s '[[:space:]]' '\n' | grep $APP_NAME | sort | uniq | wc -l)
+done
+echo ''
 
 # Wait for external IP to be assigned
 echo "=> Waiting for external IP..."
