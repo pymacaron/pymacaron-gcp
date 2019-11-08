@@ -129,6 +129,8 @@ spec:
           value: "8080"
         - name: VERSION
           value: "${VERSION}"
+        - name: PYM_ENV
+          value: "${LOCAL_NAME}"
 EOF
 
     for VAR in $(pymconfig --env-secrets)

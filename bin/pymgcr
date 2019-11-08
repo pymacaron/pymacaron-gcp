@@ -76,14 +76,12 @@ deploy() {
     LOCAL_SERVICE_NAME=$1
 
     echo "=> Preparing environment variables..."
-    CMD_ENV=""
+    CMD_ENV="PYM_ENV=$LOCAL_SERVICE_NAME"
     for VAR in $(pymconfig --env-secrets)
     do
         VALUE=$(env | grep "$VAR=" | cut -d '=' -f 2)
         CMD_ENV="$CMD_ENV,$VAR=$VALUE"
     done
-    # And remove the heading ',' character
-    CMD_ENV=$(echo $CMD_ENV | sed 's/^,\(.*\)/\1/')
 
     echo "=> Deploying to service $LOCAL_SERVICE_NAME"
     gcloud beta run deploy $LOCAL_SERVICE_NAME \
