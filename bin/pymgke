@@ -26,14 +26,11 @@ get_cluster_location() {
     echo $LOCAL_LOCATION
 }
 
-get_live_ip() {
+get_ip() {
+    # Selector must be the string 'live' or 'staging', to retrieve the public IP of the corresponding cluster
+    SELECTOR=$1
     N=$(pymconfig --name)
-    echo $(kubectl get ingress | grep "${N}-live-ingress " | awk '{ print $3 }')
-}
-
-get_staging_ip() {
-    N=$(pymconfig --name)
-    echo $(kubectl get ingress | grep "${N}-staging-ingress " | awk '{ print $3 }')
+    echo $(kubectl get ingress | grep "${N}-${SELECTOR}-ingress " | awk '{ print $3 }')
 }
 
 usage() {
@@ -59,8 +56,8 @@ parse_args() {
             "--debug")         set -x; DEBUG='true';;
             "--no-test")       export DO_TEST=;;
             "-h" | "--help")   usage; exit 0;;
-            "--live-ip")       get_live_ip; exit 0;;
-            "--staging-ip")    get_staging_ip; exit 0;;
+            "--live-ip")       get_ip 'live'; exit 0;;
+            "--staging-ip")    get_ip 'staging'; exit 0;;
             *)                 VERSION=$1;;
         esac
         shift
@@ -75,6 +72,8 @@ if [ -z "$VERSION" ]; then
 fi
 
 APP_NAME=$(pymconfig --name)
+DOMAIN_STAGING=$(pymconfig --staging-host)
+DOMAIN_LIVE=$(pymconfig --live-host)
 DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
 DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
@@ -171,6 +170,12 @@ do_apply_ingress() {
     # Deploy an ingress opening port 80 and 443, redirected to the container's port 8080
     # Accept HTTPS traffic on port 443 via a managed SSL certificate
     LOCAL_NAME=$1
+    LOCAL_DOMAIN=$2
+
+    if [ -z "$LOCAL_DOMAIN" ]; then
+        echo "BUG!! set LOCAL_DOMAIN please!"
+        exit -1
+    fi
 
     IS_DEPLOYED=$(kubectl get ingress -o wide | grep "$LOCAL_NAME " | wc -l)
 
@@ -190,7 +195,7 @@ metadata:
   name: $LOCAL_NAME-certificate
 spec:
   domains:
-    - staging2.gofrendly.com
+    - $LOCAL_DOMAIN
 EOF
     kubectl apply -f $YAML_FILE
 
@@ -240,7 +245,7 @@ EOF
     kubectl apply -f $YAML_FILE
 }
 
-do_load_balancer() {
+do_apply_load_balancer() {
     # Deploy an load balancer directing port 80 to the container's port 8080
     LOCAL_NAME=$1
 
@@ -273,6 +278,35 @@ EOF
 
         kubectl apply -f $SRV_FILE
     fi
+}
+
+do_wait_for_rollout() {
+    # Selector must be the string 'live' or 'staging'
+    LOCAL_NAME=$1
+    SELECTOR=$2
+
+    # A deployment is rolling out: wait till we can reach it on the staging/live IP
+    echo "=> Waiting for deployment to get started..."
+    kubectl rollout status deployment/$LOCAL_NAME
+
+    # Then wait for rollout to be complete
+    echo "=> Waiting for rollout to be complete..."
+    COUNT=2
+    while [ "$COUNT" -ne 1 ]; do
+        sleep 1
+        echo -n '*'
+        COUNT=$(kubectl get pods -o jsonpath="{..image}" | tr -s '[[:space:]]' '\n' | grep $APP_NAME | sort | uniq | wc -l)
+    done
+    echo ''
+
+    # Wait for external IP to be assigned
+    echo "=> Waiting for external IP..."
+    IP=""
+    while [ -z "$IP" ]; do
+        sleep 1
+        IP=$(get_ip $SELECTOR)
+    done
+    echo ''
 }
 
 #
@@ -309,30 +343,8 @@ echo "=> Deploying $VERSION to $NAME_STAGING"
 
 do_apply_deployment $NAME_STAGING
 # do_apply_load_balancer $NAME_STAGING
-do_apply_ingress $NAME_STAGING
-
-# Then wait for the deployment to be ready
-echo "=> Waiting for deployment to get started..."
-kubectl rollout status deployment/$NAME_STAGING
-
-# Then wait for rollout to be complete
-echo "=> Waiting for rollout to be complete..."
-COUNT=2
-while [ "$COUNT" -ne 1 ]; do
-    sleep 1
-    echo -n '*'
-    COUNT=$(kubectl get pods -o jsonpath="{..image}" | tr -s '[[:space:]]' '\n' | grep $APP_NAME | sort | uniq | wc -l)
-done
-echo ''
-
-# Wait for external IP to be assigned
-echo "=> Waiting for external IP..."
-IP=""
-while [ -z "$IP" ]; do
-    sleep 1
-    IP=$(get_staging_ip)
-done
-echo ''
+do_apply_ingress $NAME_STAGING $DOMAIN_STAGING
+do_wait_for_rollout $NAME_STAGING 'staging'
 
 echo "=> $NAME_STAGING is now live at $IP"
 
@@ -344,7 +356,6 @@ echo "=> $NAME_STAGING is now live at $IP"
 
 cd $ROOTDIR
 if [ ! -z "$DO_TEST" ]; then
-    URL=$(get_staging_url)
     echo ""
     echo "=> Executing tests against $NAME_STAGING"
     pymtest --host $IP --port $TEST_PORT --no-ssl-check
