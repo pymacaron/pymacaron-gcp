@@ -26,16 +26,14 @@ get_cluster_location() {
     echo $LOCAL_LOCATION
 }
 
-get_live_url() {
+get_live_ip() {
     N=$(pymconfig --name)
-    echo "NOT IMPLEMENTED"
-    exit -1
+    echo $(kubectl get ingress | grep "${N}-live-ingress " | awk '{ print $3 }')
 }
 
-get_staging_url() {
+get_staging_ip() {
     N=$(pymconfig --name)
-    LOCAL_IP=$(kubectl get service | grep "${N}-staging " | awk '{ print $4 }')
-    echo https://$LOCAL_IP
+    echo $(kubectl get ingress | grep "${N}-staging-ingress " | awk '{ print $3 }')
 }
 
 usage() {
@@ -47,8 +45,8 @@ a live service if the tests against staging all passed.
 
 OPTIONS:
   --no-test         Skip tests, but still deploy to staging first, then live.
-  --live-url        Print the url of the live environment and exit.
-  --staging-url     Print the url of the staging environment and exit.
+  --live-ip         Print the url of the live environment and exit.
+  --staging-ip      Print the url of the staging environment and exit.
   --debug           Debug verbosity.
   --help            This text.
 
@@ -61,8 +59,8 @@ parse_args() {
             "--debug")         set -x; DEBUG='true';;
             "--no-test")       export DO_TEST=;;
             "-h" | "--help")   usage; exit 0;;
-            "--live-url")      get_live_url; exit 0;;
-            "--staging-url")   get_staging_url; exit 0;;
+            "--live-ip")       get_live_ip; exit 0;;
+            "--staging-ip")    get_staging_ip; exit 0;;
             *)                 VERSION=$1;;
         esac
         shift
@@ -329,17 +327,14 @@ echo ''
 
 # Wait for external IP to be assigned
 echo "=> Waiting for external IP..."
-IP="<pending>"
-while [ "$IP" == "<pending>" ]; do
+IP=""
+while [ -z "$IP" ]; do
     sleep 1
-    echo -n '*'
-    IP=$(kubectl get service | grep "${NAME_STAGING} " | awk '{ print $4 }')
+    IP=$(get_staging_ip)
 done
 echo ''
 
 echo "=> $NAME_STAGING is now live at $IP"
-
-return
 
 # ------------------------------------------------------------------------------
 #
@@ -352,13 +347,19 @@ if [ ! -z "$DO_TEST" ]; then
     URL=$(get_staging_url)
     echo ""
     echo "=> Executing tests against $NAME_STAGING"
-    pymtest --host $URL --port $TEST_PORT --no-ssl-check
+    pymtest --host $IP --port $TEST_PORT --no-ssl-check
 fi
 
 RC=$?
 if [ "$RC" -ne 0 ]; then
-    echo "ERROR: Acceptance tests failed against $URL - deploy aborted"
+    echo "ERROR: Acceptance tests failed against $IP - deploy aborted"
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+#
+# DEPLOY TO LIVE CLUSTER
+#
+# ------------------------------------------------------------------------------
 
 # deploy ${SERVICE_NAME}-live
