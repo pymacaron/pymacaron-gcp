@@ -71,6 +71,11 @@ parse_args() {
 
 parse_args $ARGS
 
+if [ -z "$VERSION" ]; then
+    echo "ERROR: please specify a docker image version"
+    exit -1
+fi
+
 APP_NAME=$(pymconfig --name)
 DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
 DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
@@ -85,6 +90,7 @@ NAME_LIVE=${APP_NAME}-live
 # gcloud config set app/stop_previous_version true
 
 do_apply_deployment() {
+    # Deploy the container to run on port 8080
     LOCAL_NAME=$1
 
     CONTAINER_NAME=container-$APP_NAME
@@ -114,14 +120,20 @@ spec:
       containers:
       - name: $CONTAINER_NAME
         image: gcr.io/$DOCKER_REPO:${VERSION}
-        livenessProbe:
-          initialDelaySeconds: 120
-          timeoutSeconds: 10
-          periodSeconds: 90
+        readinessProbe:
+          initialDelaySeconds: 90
+          periodSeconds: 5
+          timeoutSeconds: 1
           httpGet:
             path: /ping
             port: 8080
-            scheme: HTTP
+        livenessProbe:
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 1
+          httpGet:
+            path: /ping
+            port: 8080
         ports:
         - containerPort: 8080
         env:
@@ -157,7 +169,81 @@ EOF
     fi
 }
 
-do_apply_service() {
+do_apply_ingress() {
+    # Deploy an ingress opening port 80 and 443, redirected to the container's port 8080
+    # Accept HTTPS traffic on port 443 via a managed SSL certificate
+    LOCAL_NAME=$1
+
+    IS_DEPLOYED=$(kubectl get ingress -o wide | grep "$LOCAL_NAME " | wc -l)
+
+    if [ "$IS_DEPLOYED" -eq "1" ]; then
+        echo "=> The ingress already exists"
+        return
+    fi
+
+    # Create a managed cert
+    # See: https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
+    echo "=> Applying managed certificate..."
+    YAML_FILE=.pym/cert-$LOCAL_NAME.yaml
+    cat <<EOF > $YAML_FILE
+apiVersion: networking.gke.io/v1beta1
+kind: ManagedCertificate
+metadata:
+  name: $LOCAL_NAME-certificate
+spec:
+  domains:
+    - staging2.gofrendly.com
+EOF
+    kubectl apply -f $YAML_FILE
+
+    echo "=> Applying service..."
+    YAML_FILE=.pym/nodeport-$LOCAL_NAME.yaml
+    cat <<EOF > $YAML_FILE
+apiVersion: v1
+kind: Service
+metadata:
+  name: $LOCAL_NAME-service
+  namespace: default
+  labels:
+    app: $LOCAL_NAME
+spec:
+  type: NodePort
+  selector:
+    app: $LOCAL_NAME
+    run: $LOCAL_NAME
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+EOF
+    kubectl apply -f $YAML_FILE
+
+    # Note: relevant articles are:
+    # https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
+    # https://cloud.google.com/kubernetes-engine/docs/concepts/ingress
+    echo "=> Applying ingress..."
+    YAML_FILE=.pym/ingress-$LOCAL_NAME.yaml
+    cat <<EOF > $YAML_FILE
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: $LOCAL_NAME-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: $LOCAL_NAME-ip
+    networking.gke.io/managed-certificates: $LOCAL_NAME-certificate
+  labels:
+    app: $LOCAL_NAME
+spec:
+  backend:
+    serviceName: $LOCAL_NAME-service
+    servicePort: 8080
+EOF
+    kubectl apply -f $YAML_FILE
+}
+
+do_load_balancer() {
+    # Deploy an load balancer directing port 80 to the container's port 8080
     LOCAL_NAME=$1
 
     IS_DEPLOYED=$(kubectl get services -o wide | grep "$LOCAL_NAME " | wc -l)
@@ -174,6 +260,8 @@ kind: Service
 metadata:
   name: $LOCAL_NAME
   namespace: default
+  labels:
+    app: $LOCAL_NAME
 spec:
   type: LoadBalancer
   selector:
@@ -222,7 +310,8 @@ echo ""
 echo "=> Deploying $VERSION to $NAME_STAGING"
 
 do_apply_deployment $NAME_STAGING
-do_apply_service $NAME_STAGING
+# do_apply_load_balancer $NAME_STAGING
+do_apply_ingress $NAME_STAGING
 
 # Then wait for the deployment to be ready
 echo "=> Waiting for deployment to get started..."
@@ -249,6 +338,8 @@ done
 echo ''
 
 echo "=> $NAME_STAGING is now live at $IP"
+
+return
 
 # ------------------------------------------------------------------------------
 #
