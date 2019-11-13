@@ -12,7 +12,6 @@ ARGS=$@
 VERSION=
 PROG=$(basename $0)
 DO_TEST=1
-TEST_PORT=80
 
 ROOTDIR=$(git rev-parse --show-toplevel)
 if [ "$PWD" != "$ROOTDIR" ]; then
@@ -198,19 +197,31 @@ do_apply_ingress() {
 
     # Create a managed cert
     # See: https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
-    echo "=> Applying managed certificate..."
+    echo "=> Applying managed certificate (domain: ${LOCAL_DOMAIN})..."
     YAML_FILE=.pym/cert-$LOCAL_NAME.yaml
     cat <<EOF > $YAML_FILE
 apiVersion: networking.gke.io/v1beta1
 kind: ManagedCertificate
 metadata:
-  name: $LOCAL_NAME-certificate
+  name: $LOCAL_DOMAIN-certificate
 spec:
   domains:
     - $LOCAL_DOMAIN
 EOF
     kubectl apply -f $YAML_FILE
 
+
+    # Wait for certificate to be provisioned
+    echo "=> Waiting for certificate to be provisioned"
+    STATUS='Provisioning'
+    while [ "$STATUS" != "Active" ]; do
+        sleep 1;
+        STATUS=$(kubectl get managedcertificates ${LOCAL_DOMAIN}-certificate -o jsonpath='{..certificateStatus}' | tr -s '[[:space:]]' '\n')
+        echo -n '*'
+    done
+    echo ''
+
+    # Proceed setting up the ingress
     echo "=> Applying service..."
     YAML_FILE=.pym/nodeport-$LOCAL_NAME.yaml
     cat <<EOF > $YAML_FILE
@@ -247,7 +258,7 @@ metadata:
   namespace: default
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $LOCAL_NAME-ip
-    networking.gke.io/managed-certificates: $LOCAL_NAME-certificate
+    networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate
   labels:
     app: $LOCAL_NAME
     version: $VERSION
@@ -323,6 +334,9 @@ do_wait_for_rollout() {
     done
     echo ''
 
+
+
+
     echo "=> $LOCAL_NAME is now live at $IP"
 }
 
@@ -374,6 +388,7 @@ cd $ROOTDIR
 if [ ! -z "$DO_TEST" ]; then
     echo ""
     echo "=> Executing tests against $IP:$TEST_PORT"
+    TEST_PORT=$(pymconfig --staging-port)
     pymtest --host $IP --port $TEST_PORT --no-ssl-check
 fi
 
