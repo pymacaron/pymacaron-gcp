@@ -211,15 +211,22 @@ EOF
     kubectl apply -f $YAML_FILE
 
 
-    # Wait for certificate to be provisioned
-    echo "=> Waiting for certificate to be provisioned"
-    STATUS='Provisioning'
-    while [ "$STATUS" != "Active" ]; do
-        sleep 1;
-        STATUS=$(kubectl get managedcertificates ${LOCAL_DOMAIN}-certificate -o jsonpath='{..certificateStatus}' | tr -s '[[:space:]]' '\n')
-        echo -n '*'
-    done
-    echo ''
+    # NOTE: waiting for cert is only interesting the first time it's generated,
+    # and even then, the cert won't become active until the ingress starts
+    # using it, and then with a delay of up to 15 min. So waiting won't help us
+    # get around that downtime delay...
+    # See: https://stackoverflow.com/questions/53886750/google-managed-ssl-certificate-stuck-on-failed-not-visible
+    # NOTE: leaving his code here as a reminder to self on how to check certificate status
+    #
+    # # Wait for certificate to be provisioned
+    # echo "=> Waiting for certificate to be provisioned"
+    # STATUS='Provisioning'
+    # while [ "$STATUS" != "Active" ]; do
+    #     sleep 1;
+    #     STATUS=$(kubectl get managedcertificates ${LOCAL_DOMAIN}-certificate -o jsonpath='{..certificateStatus}' | tr -s '[[:space:]]' '\n')
+    #     echo -n '*'
+    # done
+    # echo ''
 
     # Proceed setting up the ingress
     echo "=> Applying service..."
