@@ -22,8 +22,7 @@ fi
 
 get_cluster_location() {
     LOCAL_CLUSTER_NAME=$1
-    LOCAL_LOCATION=$(gcloud container clusters list | grep "$LOCAL_CLUSTER_NAME " | awk '{ print $2 }')
-    echo $LOCAL_LOCATION
+    echo $(gcloud container clusters list | grep "$LOCAL_CLUSTER_NAME " | awk '{ print $2 }')
 }
 
 get_ip() {
@@ -102,35 +101,48 @@ metadata:
   namespace: default
   labels:
     app: $LOCAL_NAME
+    version: $VERSION
 spec:
   selector:
     matchLabels:
       run: $LOCAL_NAME
       app: $LOCAL_NAME
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         run: $LOCAL_NAME
         app: $LOCAL_NAME
+        version: $VERSION
     spec:
       terminationGracePeriodSeconds: 180
       containers:
       - name: $CONTAINER_NAME
         image: gcr.io/$DOCKER_REPO:${VERSION}
         readinessProbe:
-          initialDelaySeconds: 90
+          initialDelaySeconds: 40
           periodSeconds: 5
+          failureThreshold: 3
           timeoutSeconds: 1
           httpGet:
             path: /ping
             port: 8080
         livenessProbe:
-          initialDelaySeconds: 5
+          initialDelaySeconds: 40
           periodSeconds: 5
+          failureThreshold: 3
           timeoutSeconds: 1
           httpGet:
             path: /ping
             port: 8080
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/bash", "-c", "sleep 30"]
         ports:
         - containerPort: 8080
         env:
@@ -209,6 +221,7 @@ metadata:
   namespace: default
   labels:
     app: $LOCAL_NAME
+    version: $VERSION
 spec:
   type: NodePort
   selector:
@@ -237,6 +250,7 @@ metadata:
     networking.gke.io/managed-certificates: $LOCAL_NAME-certificate
   labels:
     app: $LOCAL_NAME
+    version: $VERSION
 spec:
   backend:
     serviceName: $LOCAL_NAME-service
@@ -265,6 +279,7 @@ metadata:
   namespace: default
   labels:
     app: $LOCAL_NAME
+    version: $VERSION
 spec:
   type: LoadBalancer
   selector:
@@ -286,11 +301,11 @@ do_wait_for_rollout() {
     SELECTOR=$2
 
     # A deployment is rolling out: wait till we can reach it on the staging/live IP
-    echo "=> Waiting for deployment to get started..."
+    echo "=> Waiting for deployment rollout..."
     kubectl rollout status deployment/$LOCAL_NAME
 
     # Then wait for rollout to be complete
-    echo "=> Waiting for rollout to be complete..."
+    echo "=> Waiting for all pods to run new image..."
     COUNT=2
     while [ "$COUNT" -ne 1 ]; do
         sleep 1
@@ -307,6 +322,8 @@ do_wait_for_rollout() {
         IP=$(get_ip $SELECTOR)
     done
     echo ''
+
+    echo "=> $LOCAL_NAME is now live at $IP"
 }
 
 #
@@ -334,6 +351,7 @@ gcloud config set container/cluster $NAME_STAGING
 
 # Using --zone since the staging environment is supposed to be in one zone only
 LOCATION=$(get_cluster_location $NAME_STAGING)
+echo "=> Deploying to zone $LOCATION"
 gcloud container clusters get-credentials $NAME_STAGING --zone $LOCATION --project $GCP_PROJECT
 
 # And create/apply deployment, service and ingress, when needed
@@ -346,8 +364,6 @@ do_apply_deployment $NAME_STAGING
 do_apply_ingress $NAME_STAGING $DOMAIN_STAGING
 do_wait_for_rollout $NAME_STAGING 'staging'
 
-echo "=> $NAME_STAGING is now live at $IP"
-
 # ------------------------------------------------------------------------------
 #
 # RUN ACCEPTANCE TESTS
@@ -357,7 +373,7 @@ echo "=> $NAME_STAGING is now live at $IP"
 cd $ROOTDIR
 if [ ! -z "$DO_TEST" ]; then
     echo ""
-    echo "=> Executing tests against $NAME_STAGING"
+    echo "=> Executing tests against $IP:$TEST_PORT"
     pymtest --host $IP --port $TEST_PORT --no-ssl-check
 fi
 
@@ -373,4 +389,17 @@ fi
 #
 # ------------------------------------------------------------------------------
 
-# deploy ${SERVICE_NAME}-live
+echo "=> Using $NAME_LIVE cluster..."
+gcloud config set container/cluster $NAME_LIVE
+
+# Using --region since the live environment is supposed to be in a regional one
+LOCATION=$(get_cluster_location $NAME_LIVE)
+echo "=> Deploying to region $LOCATION"
+gcloud container clusters get-credentials $NAME_LIVE --region $LOCATION --project $GCP_PROJECT
+
+echo ""
+echo "=> Deploying $VERSION to $NAME_LIVE"
+
+do_apply_deployment $NAME_LIVE
+do_apply_ingress $NAME_LIVE $DOMAIN_LIVE
+do_wait_for_rollout $NAME_LIVE 'live'
