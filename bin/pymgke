@@ -19,6 +19,15 @@ if [ "$PWD" != "$ROOTDIR" ]; then
     exit 1
 fi
 
+check_rc() {
+    RC=$1
+    CMD=$2
+    if [ "$RC" -ne 0 ]; then
+        echo "ERROR: Command \'${CMD}\' failed - deploy aborted"
+        exit 1
+    fi
+}
+
 get_cluster_location() {
     LOCAL_CLUSTER_NAME=$1
     echo $(gcloud container clusters list | grep "$LOCAL_CLUSTER_NAME " | awk '{ print $2 }')
@@ -165,15 +174,17 @@ EOF
         echo "          value: \"$VALUE\"" >> $DEP_FILE
     done
 
+    echo "=> Checking if deployment exists or is new..."
     IS_DEPLOYED=$(kubectl get deployment | grep "$LOCAL_NAME " | wc -l)
 
     if [ "$IS_DEPLOYED" -eq "1" ]; then
         echo "=> Deployment already exists. Applying change..."
         kubectl apply -f $DEP_FILE
-
+        check_rc $? 'kubectl apply'
     else
         echo "=> Deployment is new. Creating it..."
         kubectl create --save-config -f $DEP_FILE
+        check_rc $? 'kubectl create'
     fi
 }
 
@@ -209,7 +220,7 @@ spec:
     - $LOCAL_DOMAIN
 EOF
     kubectl apply -f $YAML_FILE
-
+    check_rc $? 'kubectl apply'
 
     # NOTE: waiting for cert is only interesting the first time it's generated,
     # and even then, the cert won't become active until the ingress starts
@@ -251,6 +262,7 @@ spec:
     targetPort: 8080
 EOF
     kubectl apply -f $YAML_FILE
+    check_rc $? 'kubectl apply'
 
     # Note: relevant articles are:
     # https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
@@ -275,6 +287,7 @@ spec:
     servicePort: 8080
 EOF
     kubectl apply -f $YAML_FILE
+    check_rc $? 'kubectl apply'
 }
 
 do_apply_load_balancer() {
@@ -310,6 +323,7 @@ spec:
 EOF
 
         kubectl apply -f $SRV_FILE
+        check_rc $? 'kubectl apply'
     fi
 }
 
@@ -321,6 +335,7 @@ do_wait_for_rollout() {
     # A deployment is rolling out: wait till we can reach it on the staging/live IP
     echo "=> Waiting for deployment rollout..."
     kubectl rollout status deployment/$LOCAL_NAME
+    check_rc $? 'kubectl rollout'
 
     # Then wait for rollout to be complete
     echo "=> Waiting for all pods to run new image..."
@@ -340,9 +355,6 @@ do_wait_for_rollout() {
         IP=$(get_ip $SELECTOR)
     done
     echo ''
-
-
-
 
     echo "=> $LOCAL_NAME is now live at $IP"
 }
