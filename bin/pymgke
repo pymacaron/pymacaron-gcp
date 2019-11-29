@@ -214,7 +214,7 @@ do_apply_ingress() {
 apiVersion: networking.gke.io/v1beta1
 kind: ManagedCertificate
 metadata:
-  name: $LOCAL_DOMAIN-certificate
+  name: $LOCAL_DOMAIN-certificate2
 spec:
   domains:
     - $LOCAL_DOMAIN
@@ -277,7 +277,7 @@ metadata:
   namespace: default
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $LOCAL_NAME-ip
-    networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate
+    networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate2
   labels:
     app: $LOCAL_NAME
     version: $VERSION
@@ -301,8 +301,8 @@ do_apply_load_balancer() {
     else
         echo "=> The service does not exist. Creating it..."
 
-        SRV_FILE=.pym/service-$LOCAL_NAME.yaml
-        cat <<EOF > $SRV_FILE
+        YAML_FILE=.pym/service-$LOCAL_NAME.yaml
+        cat <<EOF > $YAML_FILE
 apiVersion: v1
 kind: Service
 metadata:
@@ -322,7 +322,7 @@ spec:
     targetPort: 8080
 EOF
 
-        kubectl apply -f $SRV_FILE
+        kubectl apply -f $YAML_FILE
         check_rc $? 'kubectl apply'
     fi
 }
