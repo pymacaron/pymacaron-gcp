@@ -132,18 +132,18 @@ spec:
       - name: $CONTAINER_NAME
         image: gcr.io/$DOCKER_REPO:${VERSION}
         readinessProbe:
-          initialDelaySeconds: 40
-          periodSeconds: 5
-          failureThreshold: 3
-          timeoutSeconds: 1
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 2
+          timeoutSeconds: 3
           httpGet:
             path: /ping
             port: 8080
         livenessProbe:
-          initialDelaySeconds: 40
-          periodSeconds: 5
-          failureThreshold: 3
-          timeoutSeconds: 1
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 2
+          timeoutSeconds: 3
           httpGet:
             path: /ping
             port: 8080
