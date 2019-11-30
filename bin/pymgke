@@ -85,8 +85,6 @@ DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
 DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
 GCP_REGION=$(pymconfig --gcp-region)
-GCP_CONCURRENCY=$(pymconfig --gcp-request-concurrency)
-GCP_MEMORY=$(pymconfig --gcp-memory)
 NAME_STAGING=${APP_NAME}-staging
 NAME_LIVE=${APP_NAME}-live
 
@@ -355,7 +353,7 @@ echo "=> Configuring gcloud..."
 gcloud config set project $GCP_PROJECT
 gcloud config set compute/region $GCP_REGION
 
-echo "=> Using $NAME_STAGING cluster..."
+echo "=> Using cluster $NAME_STAGING"
 gcloud config set container/cluster $NAME_STAGING
 
 # Using --zone since the staging environment is supposed to be in one zone only
@@ -399,7 +397,7 @@ fi
 #
 # ------------------------------------------------------------------------------
 
-echo "=> Using $NAME_LIVE cluster..."
+echo "=> Using cluster $NAME_LIVE"
 gcloud config set container/cluster $NAME_LIVE
 
 # Using --region since the live environment is supposed to be in a regional one
