@@ -93,9 +93,21 @@ NAME_LIVE=${APP_NAME}-live
 # Stop previous versions?
 # gcloud config set app/stop_previous_version true
 
+do_create_namespace() {
+    NAMESPACE=$1
+    CNT=$(kubectl get namespace | grep "$NAMESPACE " | wc -l)
+    if [ $CNT -eq 0 ]; then
+        echo "=> Creating namespace $NAMESPACE"
+        kubectl create namespace $NAMESPACE
+    fi
+    echo "=> Using namespace $NAMESPACE"
+    kubectl config set-context --current --namespace=$NAMESPACE
+}
+
 do_apply_deployment() {
     # Deploy the container to run on port 8080
     LOCAL_NAME=$1
+    NAMESPACE=$2
 
     CONTAINER_NAME=container-$APP_NAME
 
@@ -106,7 +118,7 @@ apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
   name: $LOCAL_NAME
-  namespace: default
+  namespace: $NAMESPACE
   labels:
     app: $LOCAL_NAME
     version: $VERSION
@@ -179,11 +191,11 @@ EOF
 
     if [ "$IS_DEPLOYED" -eq "1" ]; then
         echo "=> Deployment already exists. Applying change..."
-        kubectl apply -f $DEP_FILE
+        kubectl apply -f $DEP_FILE --namespace=$NAMESPACE
         check_rc $? 'kubectl apply'
     else
         echo "=> Deployment is new. Creating it..."
-        kubectl create --save-config -f $DEP_FILE
+        kubectl create --save-config -f $DEP_FILE --namespace=$NAMESPACE
         check_rc $? 'kubectl create'
     fi
 }
@@ -193,6 +205,7 @@ do_apply_ingress() {
     # Accept HTTPS traffic on port 443 via a managed SSL certificate
     LOCAL_NAME=$1
     LOCAL_DOMAIN=$2
+    NAMESPACE=$3
 
     if [ -z "$LOCAL_DOMAIN" ]; then
         echo "BUG!! set LOCAL_DOMAIN please!"
@@ -219,7 +232,7 @@ spec:
   domains:
     - $LOCAL_DOMAIN
 EOF
-    kubectl apply -f $YAML_FILE
+    kubectl apply -f $YAML_FILE --namespace=$NAMESPACE
     check_rc $? 'kubectl apply'
 
     # NOTE: waiting for cert is only interesting the first time it's generated,
@@ -247,7 +260,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: $LOCAL_NAME-service
-  namespace: default
+  namespace: $NAMESPACE
   labels:
     app: $LOCAL_NAME
     version: $VERSION
@@ -261,7 +274,7 @@ spec:
     protocol: TCP
     targetPort: 8080
 EOF
-    kubectl apply -f $YAML_FILE
+    kubectl apply -f $YAML_FILE --namespace=$NAMESPACE
     check_rc $? 'kubectl apply'
 
     # Note: relevant articles are:
@@ -274,7 +287,7 @@ apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   name: $LOCAL_NAME-ingress
-  namespace: default
+  namespace: $NAMESPACE
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $LOCAL_NAME-ip
     networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate2
@@ -286,45 +299,8 @@ spec:
     serviceName: $LOCAL_NAME-service
     servicePort: 8080
 EOF
-    kubectl apply -f $YAML_FILE
+    kubectl apply -f $YAML_FILE --namespace=$NAMESPACE
     check_rc $? 'kubectl apply'
-}
-
-do_apply_load_balancer() {
-    # Deploy an load balancer directing port 80 to the container's port 8080
-    LOCAL_NAME=$1
-
-    IS_DEPLOYED=$(kubectl get services -o wide | grep "$LOCAL_NAME " | wc -l)
-
-    if [ "$IS_DEPLOYED" -eq "1" ]; then
-        echo "=> The service already exists"
-    else
-        echo "=> The service does not exist. Creating it..."
-
-        YAML_FILE=.pym/service-$LOCAL_NAME.yaml
-        cat <<EOF > $YAML_FILE
-apiVersion: v1
-kind: Service
-metadata:
-  name: $LOCAL_NAME
-  namespace: default
-  labels:
-    app: $LOCAL_NAME
-    version: $VERSION
-spec:
-  type: LoadBalancer
-  selector:
-    app: $LOCAL_NAME
-    run: $LOCAL_NAME
-  ports:
-  - port: 80
-    protocol: TCP
-    targetPort: 8080
-EOF
-
-        kubectl apply -f $YAML_FILE
-        check_rc $? 'kubectl apply'
-    fi
 }
 
 do_wait_for_rollout() {
@@ -392,9 +368,9 @@ gcloud container clusters get-credentials $NAME_STAGING --zone $LOCATION --proje
 echo ""
 echo "=> Deploying $VERSION to $NAME_STAGING"
 
-do_apply_deployment $NAME_STAGING
-# do_apply_load_balancer $NAME_STAGING
-do_apply_ingress $NAME_STAGING $DOMAIN_STAGING
+do_create_namespace $APP_NAME
+do_apply_deployment $NAME_STAGING $APP_NAME
+do_apply_ingress $NAME_STAGING $DOMAIN_STAGING $APP_NAME
 do_wait_for_rollout $NAME_STAGING 'staging'
 
 # ------------------------------------------------------------------------------
@@ -434,6 +410,7 @@ gcloud container clusters get-credentials $NAME_LIVE --region $LOCATION --projec
 echo ""
 echo "=> Deploying $VERSION to $NAME_LIVE"
 
-do_apply_deployment $NAME_LIVE
-do_apply_ingress $NAME_LIVE $DOMAIN_LIVE
+do_create_namespace $APP_NAME
+do_apply_deployment $NAME_LIVE $APP_NAME
+do_apply_ingress $NAME_LIVE $DOMAIN_LIVE $APP_NAME
 do_wait_for_rollout $NAME_LIVE 'live'
