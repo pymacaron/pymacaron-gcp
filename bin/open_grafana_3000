@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# NOTES: requirements
+# gcloud components install kubectl
+# gcloud auth configure-docker
+#
+
+set -e
+
+ARGS=$@
+
+usage() {
+    cat << EOF
+USAGE: $PROG [--no-test] <version>
+
+Open grafana on port 3000 for staging or live.
+
+OPTIONS:
+  --live         Use the live cluster
+  --staging      Use the staging cluster
+  --debug        Debug verbosity.
+  --help         This text.
+
+EOF
+}
+
+CLUSTER=gofrendly-api-live
+GCP_PROJECT=gofrendlyapi
+
+parse_args() {
+    while [ "$1" != "" ]; do
+        case $1 in
+            "--debug")         set -x; DEBUG='true';;
+            "-h" | "--help")   usage; exit 0;;
+            "--live")          CLUSTER=gofrendly-api-live;;
+            "--staging")       CLUSTER=gofrendly-api-staging;;
+        esac
+        shift
+    done
+}
+
+parse_args $ARGS
+
+get_cluster_location() {
+    LOCAL_CLUSTER_NAME=$1
+    echo $(gcloud container clusters list | grep "$LOCAL_CLUSTER_NAME " | awk '{ print $2 }')
+}
+
+gcloud config set container/cluster $CLUSTER
+
+LOCATION=$(get_cluster_location $CLUSTER)
+echo "=> Using region $LOCATION"
+gcloud container clusters get-credentials $CLUSTER --region $LOCATION --project $GCP_PROJECT
+
+
+echo "=> Admin password:"
+kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
+
+export POD_NAME=$(kubectl get pods --namespace monitoring -l "app=grafana,release=grafana" -o jsonpath="{.items[0].metadata.name}")
+kubectl --namespace monitoring port-forward $POD_NAME 3000
