@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# NOTES: requirements
+# gcloud components install kubectl
+# gcloud auth configure-docker
+#
+
+set -e
+
+ARGS=$@
+
+usage() {
+    cat << EOF
+USAGE: $PROG
+
+Install helm, tiller, prometheus and grafana in the staging and live
+environments.
+
+OPTIONS:
+  --debug           Debug verbosity.
+  --help            This text.
+
+EOF
+}
+
+parse_args() {
+    while [ "$1" != "" ]; do
+        case $1 in
+            "--debug")         set -x; DEBUG='true';;
+            "--no-test")       export DO_TEST=;;
+            "-h" | "--help")   usage; exit 0;;
+            "--live-ip")       get_ip 'live'; exit 0;;
+            "--staging-ip")    get_ip 'staging'; exit 0;;
+            *)                 VERSION=$1;;
+        esac
+        shift
+    done
+}
+
+
+ROOTDIR=$(git rev-parse --show-toplevel)
+if [ "$PWD" != "$ROOTDIR" ]; then
+    echo "ERROR: current dir is not the clone's root directory"
+    exit 1
+fi
+
+APP_NAME=$(pymconfig --name)
+DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
+GCP_PROJECT=$DOCKER_ROOT_REPO
+GCP_REGION=$(pymconfig --gcp-region)
+NAME_STAGING=${APP_NAME}-staging
+NAME_LIVE=${APP_NAME}-live
+
+
+check_rc() {
+    RC=$1
+    CMD=$2
+    if [ "$RC" -ne 0 ]; then
+        echo "ERROR: Command \'${CMD}\' failed - deploy aborted"
+        exit 1
+    fi
+}
+
+do_create_namespace() {
+    NAMESPACE=$1
+    CNT=$(kubectl get namespace | grep "$NAMESPACE " | wc -l)
+    if [ $CNT -eq 0 ]; then
+        echo "=> Creating namespace $NAMESPACE"
+        kubectl create namespace $NAMESPACE
+    fi
+    echo "=> Using namespace $NAMESPACE"
+    kubectl config set-context --current --namespace=$NAMESPACE
+}
+
+do_setup_monitoring() {
+    CLUSTER=$1
+
+    echo "=> Using cluster $CLUSTER"
+    gcloud config set container/cluster $CLUSTER
+
+    CNT=$(kubectl get serviceAccounts --namespace kube-system | grep "tiller " | wc -l)
+    if [ $CNT -ge 1 ]; then
+        echo "=> Tiller service account already setup"
+    else
+        # Configure helm and tiller
+        echo "=> Setting up service account for tiller"
+        kubectl --namespace kube-system create sa tiller
+        check_rc $? ''
+
+        kubectl create clusterrolebinding tiller \
+                --clusterrole cluster-admin \
+                --serviceaccount=kube-system:tiller
+        check_rc $? ''
+    fi
+
+    echo "=> Installing helm"
+    curl https://raw.githubusercontent.com/kubernetes/helm/master/scripts/get | bash
+    check_rc $? ''
+
+    helm init --service-account tiller
+    check_rc $? ''
+
+    helm repo update
+    check_rc $? ''
+
+    # Install prometheus and grafana in the monitoring namespace
+    do_create_namespace monitoring
+    do_install_helm_app prometheus
+    do_install_helm_app grafana
+}
+
+
+do_install_helm_app() {
+    HELM_APP=$1
+    CNT=$(kubectl get pods --namespace monitoring | grep $HELM_APP | wc -l)
+    if [ $CNT -eq 0 ]; then
+        CNT=$(helm ls | grep $HELM_APP | wc -l)
+        if [ $CNT -ne 0 ]; then
+            echo "=> Removing helm application $HELM_APP"
+            helm del --purge $HELM_APP
+        fi
+        echo "=> Installing $HELM_APP"
+        helm install --namespace monitoring --name $HELM_APP stable/$HELM_APP
+        check_rc $? ''
+    fi
+}
+
+echo "=> Configuring gcloud..."
+gcloud config set project $GCP_PROJECT
+gcloud config set compute/region $GCP_REGION
+
+do_setup_monitoring $NAME_STAGING
+do_setup_monitoring $NAME_LIVE
