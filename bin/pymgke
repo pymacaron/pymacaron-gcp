@@ -225,7 +225,7 @@ do_apply_ingress() {
 apiVersion: networking.gke.io/v1beta1
 kind: ManagedCertificate
 metadata:
-  name: $LOCAL_DOMAIN-certificate2
+  name: $LOCAL_DOMAIN-certificate
 spec:
   domains:
     - $LOCAL_DOMAIN
@@ -288,7 +288,7 @@ metadata:
   namespace: $NAMESPACE
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $LOCAL_NAME-ip
-    networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate2
+    networking.gke.io/managed-certificates: $LOCAL_DOMAIN-certificate
   labels:
     app: $LOCAL_NAME
     version: $VERSION
