@@ -12,6 +12,7 @@ ARGS=$@
 VERSION=
 PROG=$(basename $0)
 DO_TEST=1
+ROLLBACK=
 
 ROOTDIR=$(git rev-parse --show-toplevel)
 if [ "$PWD" != "$ROOTDIR" ]; then
@@ -42,7 +43,7 @@ get_ip() {
 
 usage() {
     cat << EOF
-USAGE: $PROG [--no-test] <version>
+USAGE: $PROG [--no-test] [--rollback] <version>
 
 Deploy a Docker image to GKE in two steps, first to a staging service, then to
 a live service if the tests against staging all passed.
@@ -51,6 +52,8 @@ OPTIONS:
   --no-test         Skip tests, but still deploy to staging first, then live.
   --live-ip         Print the url of the live environment and exit.
   --staging-ip      Print the url of the staging environment and exit.
+  --rollback        Rollback to the given version (an extra fast deploy, without
+                    testing or waiting for resource readiness)
   --debug           Debug verbosity.
   --help            This text.
 
@@ -60,11 +63,12 @@ EOF
 parse_args() {
     while [ "$1" != "" ]; do
         case $1 in
-            "--debug")         set -x; DEBUG='true';;
             "--no-test")       export DO_TEST=;;
-            "-h" | "--help")   usage; exit 0;;
+            "--rollback")      export ROLLBACK=1;;
             "--live-ip")       get_ip 'live'; exit 0;;
             "--staging-ip")    get_ip 'staging'; exit 0;;
+            "--debug")         set -x; DEBUG='true';;
+            "-h" | "--help")   usage; exit 0;;
             *)                 VERSION=$1;;
         esac
         shift
@@ -337,6 +341,24 @@ do_wait_for_rollout() {
 # General settings
 #
 
+if [ ! -z "$ROLLBACK" ]; then
+    echo ""
+    echo "***********************************************"
+    echo "*                                             *"
+    echo "* ROLLING BACK TO VERSION $VERSION"
+    echo "*                                             *"
+    echo "***********************************************"
+    echo ""
+else
+    echo ""
+    echo "***********************************************"
+    echo "*                                             *"
+    echo "* DEPLOYING VERSION $VERSION"
+    echo "*                                             *"
+    echo "***********************************************"
+    echo ""
+fi
+
 echo "=> Creating tmp dir .pym/"
 mkdir -p .pym
 
@@ -369,7 +391,11 @@ echo "=> Deploying $VERSION to $NAME_STAGING"
 do_create_namespace $APP_NAME
 do_apply_deployment $NAME_STAGING $APP_NAME
 do_apply_ingress $NAME_STAGING $DOMAIN_STAGING $APP_NAME
-do_wait_for_rollout $NAME_STAGING 'staging'
+if [ -z "$ROLLBACK" ]; then
+    do_wait_for_rollout $NAME_STAGING 'staging'
+else
+    echo "ROLLBACK: not waiting for staging to be ready"
+fi
 
 # ------------------------------------------------------------------------------
 #
@@ -379,16 +405,21 @@ do_wait_for_rollout $NAME_STAGING 'staging'
 
 cd $ROOTDIR
 if [ ! -z "$DO_TEST" ]; then
-    echo ""
-    echo "=> Executing tests against $IP:$TEST_PORT"
-    TEST_PORT=$(pymconfig --staging-port)
-    pymtest --host $IP --port $TEST_PORT --no-ssl-check
-fi
+    if [ -z "$ROLLBACK" ]; then
+        echo ""
+        echo "=> Executing tests against $IP:$TEST_PORT"
+        TEST_PORT=$(pymconfig --staging-port)
+        pymtest --host $IP --port $TEST_PORT --no-ssl-check
 
-RC=$?
-if [ "$RC" -ne 0 ]; then
-    echo "ERROR: Acceptance tests failed against $IP - deploy aborted"
-    exit 1
+        RC=$?
+        if [ "$RC" -ne 0 ]; then
+            echo "ERROR: Acceptance tests failed against $IP - deploy aborted"
+            exit 1
+        fi
+
+    else
+        echo "ROLLBACK: skip staging tests"
+    fi
 fi
 
 # ------------------------------------------------------------------------------
