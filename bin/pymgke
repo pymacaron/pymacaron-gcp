@@ -309,6 +309,7 @@ do_wait_for_rollout() {
     # Selector must be the string 'live' or 'staging'
     LOCAL_NAME=$1
     SELECTOR=$2
+    NAMESPACE=$3
 
     # A deployment is rolling out: wait till we can reach it on the staging/live IP
     echo "=> Waiting for deployment rollout..."
@@ -321,7 +322,7 @@ do_wait_for_rollout() {
     while [ "$COUNT" -ne 1 ]; do
         sleep 1
         echo -n '*'
-        COUNT=$(kubectl get pods -o jsonpath="{..image}" | tr -s '[[:space:]]' '\n' | grep $APP_NAME | sort | uniq | wc -l)
+        COUNT=$(kubectl get pods -o jsonpath='{range .items[*]}{@.metadata.labels.version}{" "}{@..phase}{"\n"}{end}' --namespace $NAMESPACE | grep Running | sort | uniq | wc -l)
     done
     echo ''
 
@@ -392,7 +393,7 @@ do_create_namespace $APP_NAME
 do_apply_deployment $NAME_STAGING $APP_NAME
 do_apply_ingress $NAME_STAGING $DOMAIN_STAGING $APP_NAME
 if [ -z "$ROLLBACK" ]; then
-    do_wait_for_rollout $NAME_STAGING 'staging'
+    do_wait_for_rollout $NAME_STAGING 'staging' $APP_NAME
 else
     echo "ROLLBACK: not waiting for staging to be ready"
 fi
@@ -442,4 +443,4 @@ echo "=> Deploying $VERSION to $NAME_LIVE"
 do_create_namespace $APP_NAME
 do_apply_deployment $NAME_LIVE $APP_NAME
 do_apply_ingress $NAME_LIVE $DOMAIN_LIVE $APP_NAME
-do_wait_for_rollout $NAME_LIVE 'live'
+do_wait_for_rollout $NAME_LIVE 'live' $APP_NAME
