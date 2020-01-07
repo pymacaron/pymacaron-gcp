@@ -12,6 +12,7 @@ ARGS=$@
 VERSION=
 PROG=$(basename $0)
 DO_TEST=1
+STAGING_ONLY=
 ROLLBACK=
 
 ROOTDIR=$(git rev-parse --show-toplevel)
@@ -50,6 +51,7 @@ a live service if the tests against staging all passed.
 
 OPTIONS:
   --no-test         Skip tests, but still deploy to staging first, then live.
+  --staging-only    Deploy only to staging cluster, not to the live one.
   --live-ip         Print the url of the live environment and exit.
   --staging-ip      Print the url of the staging environment and exit.
   --rollback        Rollback to the given version (an extra fast deploy, without
@@ -64,6 +66,7 @@ parse_args() {
     while [ "$1" != "" ]; do
         case $1 in
             "--no-test")       export DO_TEST=;;
+            "--staging-only")  export STAGING_ONLY=1;;
             "--rollback")      export ROLLBACK=1;;
             "--live-ip")       get_ip 'live'; exit 0;;
             "--staging-ip")    get_ip 'staging'; exit 0;;
@@ -429,18 +432,23 @@ fi
 #
 # ------------------------------------------------------------------------------
 
-echo "=> Using cluster $NAME_LIVE"
-gcloud config set container/cluster $NAME_LIVE
+if [ ! -z "$STAGING_ONLY" ]; then
+    echo "=> Not deploying to live cluster"
+else
 
-# Using --region since the live environment is supposed to be in a regional one
-LOCATION=$(get_cluster_location $NAME_LIVE)
-echo "=> Deploying to region $LOCATION"
-gcloud container clusters get-credentials $NAME_LIVE --region $LOCATION --project $GCP_PROJECT
+    echo "=> Using cluster $NAME_LIVE"
+    gcloud config set container/cluster $NAME_LIVE
 
-echo ""
-echo "=> Deploying $VERSION to $NAME_LIVE"
+    # Using --region since the live environment is supposed to be in a regional one
+    LOCATION=$(get_cluster_location $NAME_LIVE)
+    echo "=> Deploying to region $LOCATION"
+    gcloud container clusters get-credentials $NAME_LIVE --region $LOCATION --project $GCP_PROJECT
 
-do_create_namespace $APP_NAME
-do_apply_deployment $NAME_LIVE $APP_NAME
-do_apply_ingress $NAME_LIVE $DOMAIN_LIVE $APP_NAME
-do_wait_for_rollout $NAME_LIVE 'live' $APP_NAME
+    echo ""
+    echo "=> Deploying $VERSION to $NAME_LIVE"
+
+    do_create_namespace $APP_NAME
+    do_apply_deployment $NAME_LIVE $APP_NAME
+    do_apply_ingress $NAME_LIVE $DOMAIN_LIVE $APP_NAME
+    do_wait_for_rollout $NAME_LIVE 'live' $APP_NAME
+fi
