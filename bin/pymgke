@@ -92,6 +92,7 @@ DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
 DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
 GCP_REGION=$(pymconfig --gcp-region)
+MEMORY_LIMIT=$(pymconfig --memory-limit)
 NAME_STAGING=${APP_NAME}-staging
 NAME_LIVE=${APP_NAME}-live
 
@@ -148,19 +149,24 @@ spec:
       containers:
       - name: $CONTAINER_NAME
         image: gcr.io/$DOCKER_REPO:${VERSION}
+        resources:
+          requests:
+            memory: "${MEMORY_LIMIT}Mi"
+          limits:
+            memory: "${MEMORY_LIMIT}Mi"
         readinessProbe:
-          initialDelaySeconds: 60
+          initialDelaySeconds: 90
           periodSeconds: 10
-          failureThreshold: 2
-          timeoutSeconds: 3
+          failureThreshold: 3
+          timeoutSeconds: 5
           httpGet:
             path: /ping
             port: 8080
         livenessProbe:
-          initialDelaySeconds: 60
+          initialDelaySeconds: 90
           periodSeconds: 10
-          failureThreshold: 2
-          timeoutSeconds: 3
+          failureThreshold: 3
+          timeoutSeconds: 5
           httpGet:
             path: /ping
             port: 8080
