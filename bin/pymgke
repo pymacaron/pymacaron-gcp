@@ -155,7 +155,7 @@ spec:
           limits:
             memory: "${MEMORY_LIMIT}Mi"
         readinessProbe:
-          initialDelaySeconds: 90
+          initialDelaySeconds: 150
           periodSeconds: 10
           failureThreshold: 3
           timeoutSeconds: 5
@@ -163,7 +163,7 @@ spec:
             path: /ping
             port: 8080
         livenessProbe:
-          initialDelaySeconds: 90
+          initialDelaySeconds: 150
           periodSeconds: 10
           failureThreshold: 3
           timeoutSeconds: 5
