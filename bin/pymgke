@@ -92,7 +92,7 @@ DOCKER_ROOT_REPO=$(pymconfig --docker-repo)
 DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
 GCP_REGION=$(pymconfig --gcp-region)
-MEMORY_LIMIT=$(pymconfig --memory-limit)
+MEMORY_LIMIT=$(pymconfig --memory-limit | tail -n 1)
 NAME_STAGING=${APP_NAME}-staging
 NAME_LIVE=${APP_NAME}-live
 
