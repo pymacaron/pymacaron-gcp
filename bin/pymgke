@@ -263,6 +263,23 @@ EOF
     # done
     # echo ''
 
+    # Configure the timeout and connection draining of the GCP load balancer
+    # See: https://cloud.google.com/kubernetes-engine/docs/how-to/configure-backend-service#creating_a_backendconfig
+    echo "=> Applying backend..."
+    YAML_FILE=.pym/backend-$LOCAL_NAME.yaml
+    cat <<EOF > $YAML_FILE
+apiVersion: cloud.google.com/v1beta1
+kind: BackendConfig
+metadata:
+  name: $LOCAL_NAME-backend
+spec:
+  timeoutSec: 50
+  connectionDraining:
+    drainingTimeoutSec: 60
+EOF
+    kubectl apply -f $YAML_FILE --namespace=$NAMESPACE
+    check_rc $? 'kubectl apply'
+
     # Proceed setting up the ingress
     echo "=> Applying service..."
     YAML_FILE=.pym/nodeport-$LOCAL_NAME.yaml
@@ -275,6 +292,8 @@ metadata:
   labels:
     app: $LOCAL_NAME
     version: $VERSION
+  annotations:
+    beta.cloud.google.com/backend-config: '{"ports": {"8080":"$LOCAL_NAME-backend"}}'
 spec:
   type: NodePort
   selector:
@@ -287,6 +306,10 @@ spec:
 EOF
     kubectl apply -f $YAML_FILE --namespace=$NAMESPACE
     check_rc $? 'kubectl apply'
+
+    # Verify the backend settings with:
+    # gcloud compute backend-services list -> find the backend
+    # gcloud compute backend-services describe <BACKEND_NAME> --global
 
     # Note: relevant articles are:
     # https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
