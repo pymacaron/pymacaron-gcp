@@ -188,7 +188,8 @@ EOF
     for VAR in $(pymconfig --env-secrets)
     do
         echo "   Adding $VAR"
-        VALUE=$(env | grep "^$VAR=" | cut -d '=' -f 2)
+        # Notice '-f 2-' in cut to only cut left of the 1st occurence of =
+        VALUE=$(env | grep "^$VAR=" | cut -d '=' -f 2-)
         if [ -z "$VALUE" ]; then
             echo "ERROR: variable $VAR has no value in env"
             exit 1
