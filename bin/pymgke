@@ -82,8 +82,10 @@ fi
 
 # All global variables
 PYMCONFIG_ARGS=""
+PYM_ENV=live
 if [ ! -z "$TARGET_ENV" ]; then
     PYMCONFIG_ARGS="--env $TARGET_ENV"
+    PYM_ENV=$TARGET_ENV
 fi
 APP_NAME=$(pymconfig $PYMCONFIG_ARGS --name)
 CLUSTER_NAME=${APP_NAME}
@@ -96,9 +98,6 @@ DOCKER_REPO=$DOCKER_ROOT_REPO/$APP_NAME
 GCP_PROJECT=$DOCKER_ROOT_REPO
 GCP_REGION=$(pymconfig $PYMCONFIG_ARGS --gcp-region)
 MEMORY_LIMIT=$(pymconfig $PYMCONFIG_ARGS --memory-limit | tail -n 1)
-NAME_STAGING=${APP_NAME}-staging
-NAME_LIVE=${APP_NAME}-live
-NAME_WORKERS=${APP_NAME}-workers
 
 setup_gcloud() {
     echo "=> Configuring gcloud for $GCP_PROJECT/$GCP_REGION/$CLUSTER_NAME..."
@@ -197,7 +196,7 @@ spec:
         - name: VERSION
           value: "${VERSION}"
         - name: PYM_ENV
-          value: "${CLUSTER_NAME}"
+          value: "${PYM_ENV}"
 EOF
 
     for VAR in $(pymconfig $PYMCONFIG_ARGS --env-secrets)
