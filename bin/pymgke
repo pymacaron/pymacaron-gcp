@@ -134,7 +134,7 @@ do_apply_deployment() {
     echo "=> Creating pod config"
     DEP_FILE=.pym/deployment-$CLUSTER_NAME.yaml
     cat <<EOF > $DEP_FILE
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: $CLUSTER_NAME
