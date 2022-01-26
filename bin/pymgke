@@ -296,18 +296,6 @@ spec:
     port: 8080
 EOF
 
-    # The old BackendConfig
-    #     cat <<EOF > $YAML_FILE
-    # apiVersion: cloud.google.com/v1beta1
-    # kind: BackendConfig
-    # metadata:
-    #   name: $CLUSTER_NAME-backend
-    # spec:
-    #   timeoutSec: 50
-    #   connectionDraining:
-    #     drainingTimeoutSec: 60
-    # EOF
-
     kubectl apply -f $YAML_FILE --namespace=$APP_NAME
     check_rc $? 'kubectl apply'
 
