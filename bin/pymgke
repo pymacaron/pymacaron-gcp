@@ -287,8 +287,8 @@ metadata:
   name: $CLUSTER_NAME-backend
 spec:
   healthCheck:
-    checkIntervalSec: 10
-    timeoutSec: 50
+    checkIntervalSec: 30
+    timeoutSec: 30
     healthyThreshold: 1
     unhealthyThreshold: 3
     type: HTTP
@@ -335,12 +335,12 @@ EOF
     # gcloud compute backend-services describe <BACKEND_NAME> --global
 
     # Note: relevant articles are:
-    # https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
-    # https://cloud.google.com/kubernetes-engine/docs/concepts/ingress
+    # template taken from: https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
+    # also read: https://cloud.google.com/kubernetes-engine/docs/concepts/ingress
     echo "=> Applying ingress..."
     YAML_FILE=.pym/ingress-$CLUSTER_NAME.yaml
     cat <<EOF > $YAML_FILE
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: $CLUSTER_NAME-ingress
@@ -348,14 +348,15 @@ metadata:
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $CLUSTER_NAME-ip
     networking.gke.io/managed-certificates: $DOMAIN-certificate
-  labels:
-    app: $CLUSTER_NAME
-    version: $VERSION
+    kubernetes.io/ingress.class: "gce"
 spec:
-  backend:
-    serviceName: $CLUSTER_NAME-service
-    servicePort: 8080
+  defaultBackend:
+    service:
+      name: $CLUSTER_NAME-service
+      port:
+        number: 8080
 EOF
+
     kubectl apply -f $YAML_FILE --namespace=$APP_NAME
     check_rc $? 'kubectl apply'
 }
