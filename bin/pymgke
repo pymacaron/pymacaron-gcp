@@ -150,7 +150,7 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 2
+      maxSurge: 5
       maxUnavailable: 0
   template:
     metadata:
@@ -166,10 +166,12 @@ spec:
         resources:
           requests:
             memory: "${MEMORY_LIMIT}Mi"
+            cpu: "250m"
           limits:
             memory: "${MEMORY_LIMIT}Mi"
+            cpu: "500m"
         readinessProbe:
-          initialDelaySeconds: 45
+          initialDelaySeconds: 90
           periodSeconds: 10
           failureThreshold: 3
           timeoutSeconds: 5
@@ -177,7 +179,7 @@ spec:
             path: /ping
             port: 8080
         livenessProbe:
-          initialDelaySeconds: 45
+          initialDelaySeconds: 90
           periodSeconds: 10
           failureThreshold: 3
           timeoutSeconds: 10
