@@ -189,7 +189,7 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["/bin/bash", "-c", "sleep 30"]
+              command: ["/bin/bash", "-c", "sleep 60"]
         ports:
         - containerPort: 8080
         env:
@@ -289,8 +289,8 @@ metadata:
   name: $CLUSTER_NAME-backend
 spec:
   healthCheck:
-    checkIntervalSec: 30
-    timeoutSec: 30
+    checkIntervalSec: 45
+    timeoutSec: 45
     healthyThreshold: 1
     unhealthyThreshold: 3
     type: HTTP
