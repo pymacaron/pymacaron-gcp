@@ -17,12 +17,6 @@ TARGET_ENV=
 PYMCONFIG_ARGS=
 ROLLBACK=
 
-ROOTDIR=$(git rev-parse --show-toplevel)
-if [ "$PWD" != "$ROOTDIR" ]; then
-    echo "ERROR: current dir is not the clone's root directory"
-    exit 1
-fi
-
 check_rc() {
     RC=$1
     CMD=$2
@@ -74,6 +68,12 @@ parse_args() {
 }
 
 parse_args $ARGS
+
+ROOTDIR=$(git rev-parse --show-toplevel | sed -e 's|^/private||')
+if [ "$PWD" != "$ROOTDIR" ]; then
+    echo "ERROR: current dir is not the clone's root directory"
+    exit 1
+fi
 
 if [ -z "$VERSION" -a -z "$SHOW_IP" ]; then
     echo "ERROR: please specify a docker image version"
