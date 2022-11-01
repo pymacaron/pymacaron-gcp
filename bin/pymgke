@@ -446,3 +446,30 @@ if [ -z "$ROLLBACK" ]; then
 else
     echo "ROLLBACK: not waiting for staging to be ready"
 fi
+
+# ------------------------------------------------------------------------------
+#
+# RUN ACCEPTANCE TESTS (if only one env avaliable for deploy)
+#
+# ------------------------------------------------------------------------------
+
+cd $ROOTDIR
+if [ ! -z "$DO_TEST" ] && [ -f "pym-config.yaml" ]; then
+    if [ -z "$ROLLBACK" ]; then
+        echo ""
+        echo "=> Executing tests against $IP:$TEST_PORT"
+        TEST_PORT=$(pymconfig --port)
+        pymtest --host $IP --port $TEST_PORT --no-ssl-check
+
+        RC=$?
+        if [ "$RC" -ne 0 ]; then
+            echo "ERROR: Acceptance tests failed against $IP - deploy aborted"
+            exit 1
+        fi
+
+    else
+        echo "ROLLBACK: skip staging tests"
+    fi
+fi
+
+echo "=> Done."
