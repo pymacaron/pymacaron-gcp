@@ -11,7 +11,6 @@ ARGS=$@
 
 VERSION=
 PROG=$(basename $0)
-DO_TEST=1
 SHOW_IP=
 TARGET_ENV=
 PYMCONFIG_ARGS=
@@ -30,22 +29,20 @@ usage() {
     cat << EOF
 USAGE: $PROG [--no-test] [--rollback] <version>
 
-Deploy a pymacaron Docker image to a GKE cluster and optionally run acceptance
-tests afterward. If --env is specified, will deploy to the environment defined
-in the 'pym-config.<env>.yaml' file associated to that environment. If not
-environment is specified, defaults to using the file 'pym-config.yaml'.
+Deploy a pymacaron Docker image to a GKE cluster. If --env is specified, will
+deploy to the environment defined in the 'pym-config.<env>.yaml' file
+associated to that environment. If not environment is specified, defaults to
+using the file 'pym-config.yaml'.
 
 EXAMPLES:
   pymgke 200415-0819-953-b3548e --env live
-  pymgke 200415-0819-953-b3548e --no-test --env staging
   pymgke --env live --ip
 
 OPTIONS:
   --env ENV       Which pym-config.<ENV>.yaml, aka environment, to deploy to
-  --no-test       Skip tests, but still deploy to staging first, then live.
   --ip            Print the given environment and exit.
   --rollback      Rollback to the given version (an extra fast deploy, without
-                  testing or waiting for resource readiness)
+                  waiting for resource readiness)
   --debug         Debug verbosity.
   --help          This text.
 
@@ -56,7 +53,6 @@ parse_args() {
     while [ "$1" != "" ]; do
         case $1 in
             "--env")           shift; export TARGET_ENV=$1;;
-            "--no-test")       export DO_TEST=;;
             "--rollback")      export ROLLBACK=1;;
             "--ip")            export SHOW_IP=1;;
             "--debug")         set -x; DEBUG='true';;
