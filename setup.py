@@ -21,9 +21,9 @@ if not version:
         path_pkg_info = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'PKG-INFO')
         if os.path.isfile(path_pkg_info):
             with open(path_pkg_info, 'r')as f:
-                for l in f.readlines():
-                    if 'Version' in l:
-                        _, version = l.split(' ')
+                for line in f.readlines():
+                    if 'Version' in line:
+                        _, version = line.split(' ')
         else:
             print("WARNING: cannot set version in custom setup.py")
 
